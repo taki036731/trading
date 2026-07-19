@@ -1,7 +1,10 @@
+from lib import setup_logging
 from lib.stock_utils import fetch_stock_data
 
 
 def main():
+    setup_logging()
+
     # Appleの株価
     symbol = "AAPL"
     print(f"{symbol} のデータを取得中...")

@@ -1,0 +1,15 @@
+{
+  "[python]": {
+    // Pythonファイルの標準フォーマッター（コード整形ツール）をRuffに指定します
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    // ファイル保存時に自動でフォーマットを実行します
+    "editor.formatOnSave": true,
+    // 保存時に実行する追加のコードアクションを設定します
+    "editor.codeActionsOnSave": {
+      // RuffによるLintエラー（構文の警告など）の自動修正を有効にします
+      "source.fixAll.ruff": "explicit",
+      // 使っていないimportの自動削除や、アルファベット順の並び替えを行います
+      "source.organizeImports.ruff": "explicit"
+    }
+  }
+}

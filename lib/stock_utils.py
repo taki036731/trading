@@ -1,9 +1,12 @@
+import logging
 import os
 
 import pandas as pd
 import yfinance as yf
 
 CACHE_DIR = "data"
+
+logger = logging.getLogger(__name__)
 
 
 def fetch_stock_data(
@@ -29,7 +32,7 @@ def fetch_stock_data(
 
     # 1. データの用意（キャッシュの読み込みと差分更新、または全期間の新規取得）
     if os.path.exists(cache_path):
-        print(f"[{ticker}] キャッシュからデータを読み込みます。")
+        logger.info(f"[{ticker}] キャッシュからデータを読み込みます。")
         df = pd.read_parquet(cache_path, engine="auto")
 
         # キャッシュの最新日付を取得し、その翌日を差分取得の開始日に設定
@@ -41,7 +44,7 @@ def fetch_stock_data(
         df_new = ticker_obj.history(start=next_date)
 
         if not df_new.empty:
-            print(
+            logger.info(
                 f"[{ticker}] {next_date} 以降の新しいデータを取得し、キャッシュを更新します。"
             )
             # 既存データと新規データを結合
@@ -51,21 +54,25 @@ def fetch_stock_data(
             # 更新したデータセットで上書き保存
             df.to_parquet(cache_path, engine="auto")
         else:
-            print(
+            logger.info(
                 f"[{ticker}] 追加すべき新しいデータはありません（キャッシュは最新です）。"
             )
 
     else:
-        print(f"[{ticker}] キャッシュが存在しないため、yfinanceから全期間取得します。")
+        logger.info(
+            f"[{ticker}] キャッシュが存在しないため、yfinanceから全期間取得します。"
+        )
         ticker_obj = yf.Ticker(ticker)
         # キャッシュ構築のため、最初は全期間 (period="max") を取得
         df = ticker_obj.history(period="max")
 
         if not df.empty:
             df.to_parquet(cache_path, engine="auto")
-            print(f"[{ticker}] 全期間データをキャッシュに保存しました。")
+            logger.info(f"[{ticker}] 全期間データをキャッシュに保存しました。")
         else:
-            print(f"[{ticker}] データの取得に失敗したか、データが存在しません。")
+            logger.warning(
+                f"[{ticker}] データの取得に失敗したか、データが存在しません。"
+            )
             return df
 
     # 2. 指定された期間でデータを絞り込んで返す

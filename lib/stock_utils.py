@@ -1,20 +1,79 @@
+import os
+
 import pandas as pd
 import yfinance as yf
 
+CACHE_DIR = "data"
+
 
 def fetch_stock_data(
-    ticker_symbol: str, period: str = "1mo", interval: str = "1d"
+    ticker: str, start: str | None = None, end: str | None = None
 ) -> pd.DataFrame:
-    """yfinanceを使用して株価データを取得します。
+    """指定された銘柄のヒストリカルデータを取得し、Parquet形式でキャッシュ・更新を行う関数。
+
+    ローカルの `data` ディレクトリにParquetファイルが存在する場合はそれを読み込みます。
+    キャッシュが存在する場合でも、データ内の最新日付を確認し、不足している新しいデータがあれば
+    yfinanceから自動的に取得してキャッシュに追記（差分更新）します。
 
     Args:
-        ticker_symbol (str): ティッカーシンボル (例: 'AAPL', '7203.T')。
-        period (str): 取得期間 (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)。デフォルトは '1mo'。
-        interval (str): データの間隔 (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo)。デフォルトは '1d'。
+        ticker (str): 取得する銘柄のティッカーシンボル（例: '7203.T', 'AAPL'）。
+        start (str, optional): データの取得開始日（'YYYY-MM-DD'）。デフォルトは None（全期間）。
+        end (str, optional): データの取得終了日（'YYYY-MM-DD'）。デフォルトは None（最新まで）。
 
     Returns:
-        pd.DataFrame: 取得した株価データ（Open, High, Low, Close, Volumeなど）を含むデータフレーム。
+        pd.DataFrame: 指定された期間の株価データを含むデータフレーム。
+                      データの取得に失敗した場合や存在しない場合は空のデータフレームを返します。
     """
-    ticker = yf.Ticker(ticker_symbol)
-    df = ticker.history(period=period, interval=interval)
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    cache_path = os.path.join(CACHE_DIR, f"{ticker}.parquet")
+
+    # 1. データの用意（キャッシュの読み込みと差分更新、または全期間の新規取得）
+    if os.path.exists(cache_path):
+        print(f"[{ticker}] キャッシュからデータを読み込みます。")
+        df = pd.read_parquet(cache_path, engine="auto")
+
+        # キャッシュの最新日付を取得し、その翌日を差分取得の開始日に設定
+        last_date = df.index.max()
+        next_date = (last_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+        ticker_obj = yf.Ticker(ticker)
+        # 次の日付から最新までのデータを取得
+        df_new = ticker_obj.history(start=next_date)
+
+        if not df_new.empty:
+            print(
+                f"[{ticker}] {next_date} 以降の新しいデータを取得し、キャッシュを更新します。"
+            )
+            # 既存データと新規データを結合
+            df = pd.concat([df, df_new])
+            # 重複データが存在する場合は排除（念のための安全策）し、日付順にソート
+            df = df[~df.index.duplicated(keep="last")].sort_index()
+            # 更新したデータセットで上書き保存
+            df.to_parquet(cache_path, engine="auto")
+        else:
+            print(
+                f"[{ticker}] 追加すべき新しいデータはありません（キャッシュは最新です）。"
+            )
+
+    else:
+        print(f"[{ticker}] キャッシュが存在しないため、yfinanceから全期間取得します。")
+        ticker_obj = yf.Ticker(ticker)
+        # キャッシュ構築のため、最初は全期間 (period="max") を取得
+        df = ticker_obj.history(period="max")
+
+        if not df.empty:
+            df.to_parquet(cache_path, engine="auto")
+            print(f"[{ticker}] 全期間データをキャッシュに保存しました。")
+        else:
+            print(f"[{ticker}] データの取得に失敗したか、データが存在しません。")
+            return df
+
+    # 2. 指定された期間でデータを絞り込んで返す
+    if start and end:
+        df = df.loc[start:end]
+    elif start:
+        df = df.loc[start:]
+    elif end:
+        df = df.loc[:end]
+
     return df

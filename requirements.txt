@@ -17,6 +17,7 @@ peewee==4.2.6
 pip==26.1.2
 platformdirs==4.10.1
 protobuf==7.35.1
+pyarrow==25.0.0
 pycparser==3.0
 pygments==2.20.0
 python-dateutil==2.9.0.post0

@@ -39,9 +39,8 @@ def fetch_stock_data(
         last_date = df.index.max()
         next_date = (last_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
-        ticker_obj = yf.Ticker(ticker)
         # 次の日付から最新までのデータを取得
-        df_new = ticker_obj.history(start=next_date)
+        df_new = _history(ticker, next_date)
 
         if not df_new.empty:
             logger.info(
@@ -62,9 +61,8 @@ def fetch_stock_data(
         logger.info(
             f"[{ticker}] キャッシュが存在しないため、yfinanceから全期間取得します。"
         )
-        ticker_obj = yf.Ticker(ticker)
         # キャッシュ構築のため、最初は全期間 (period="max") を取得
-        df = ticker_obj.history(period="max")
+        df = _history(ticker)
 
         if not df.empty:
             df.to_parquet(cache_path, engine="auto")
@@ -82,5 +80,54 @@ def fetch_stock_data(
         df = df.loc[start:]
     elif end:
         df = df.loc[:end]
+
+    return df
+
+
+def _history(ticker: str, start: str | None = None) -> pd.DataFrame:
+    """yfinanceを使用してヒストリカルデータを取得する内部関数。
+    Args:
+        ticker (str): 取得する銘柄のティッカーシンボル。
+        start (str, optional): データの取得開始日（'YYYY-MM-DD'）。
+            指定がない場合は全期間（period="max"）を取得します。デフォルトは None。
+
+    Returns:
+        pd.DataFrame: 取得した株価データ（Open, High, Low, Close, Volume）。
+            タイムゾーン情報は削除されます。
+    """
+    ticker_obj = yf.Ticker(ticker)
+    if start is not None:
+        df = ticker_obj.history(start=start)
+    else:
+        df = ticker_obj.history(period="max")
+
+    # タイムゾーンを消去して日付操作を安定させる
+    if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+    df = df[["Open", "High", "Low", "Close", "Volume"]]
+
+    return df
+
+
+def add_sma(
+    df: pd.DataFrame, window: int = 20, column_name: str | None = None
+) -> pd.DataFrame:
+    """データフレームに単純移動平均（SMA）を追加する。
+
+    Args:
+        df (pd.DataFrame): 株価データを含むデータフレーム。'Close'列が含まれている必要があります。
+        window (int): 移動平均を計算する期間。デフォルトは 20。
+        column_name (str | None, optional): 追加する列の名前。
+            指定しない場合は 'SMA_{window}' となります。デフォルトは None。
+
+    Returns:
+        pd.DataFrame: SMA列が追加されたデータフレーム。
+    """
+
+    if column_name is None:
+        column_name = f"SMA_{window}"
+
+    # pandasのrollingを使ってSMAを計算し、新しい列として追加
+    df[column_name] = df["Close"].rolling(window=window).mean()
 
     return df

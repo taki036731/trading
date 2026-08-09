@@ -1,5 +1,7 @@
+import csv
 import datetime
 import math
+from typing import Any
 
 import backtrader as bt
 
@@ -8,9 +10,10 @@ from lib import setup_logging
 
 
 class OsamuStrategy(bt.Strategy):
-    # --- 1. パラメータ入力 ---
-    # backtrader独自の仕様で、クラス変数 params に「タプルのタプル」を代入しています。
-    # Pythonの標準的な文法としては、複数の要素を持つ入れ子状のイミュータブル（変更不可）な集合です。
+    data: Any
+    broker: Any
+    position: Any
+
     params = (
         ("short_length", 5),  # (名前, デフォルト値) という形式のタプル
         ("long_length", 20),
@@ -40,15 +43,25 @@ class OsamuStrategy(bt.Strategy):
         # ゴールデンクロス・デッドクロスの判定 (1: ゴールデン, -1: デッド, 0: クロスなし)
         self.crossover = bt.indicators.CrossOver(self.short_ma, self.long_ma)  # type: ignore
 
-        # 注文状態を管理
-        self.order = None
+        # 待機中の注文を追跡する変数
+        self.stop_order = None
+        self.limit_order = None
+
+        # --- CSV出力用の変数 ---
+        self.log_data = []  # 全ての日次データを格納するリスト
+        self.daily_buy_qty = 0  # 当日の買い約定数を一時保存
+        self.daily_sell_qty = 0  # 当日の売り約定数を一時保存
+
+    # 注文のステータスが変化したときに自動で呼び出されるメソッド
+    def notify_order(self, order):
+        # 注文が「完了（約定）」した場合のみ処理
+        if order.status in [order.Completed]:
+            if order.isbuy():
+                self.daily_buy_qty += order.executed.size
+            elif order.issell():
+                self.daily_sell_qty += order.executed.size
 
     def next(self):
-        # 進行中の注文があれば、重複エントリーを防ぐために何もしない
-        if self.order:
-            return
-
-        # 現在のローソク足の日時を取得
         current_date = self.data.datetime.datetime(0)
 
         # inDateRange (指定期間内かどうかの判定)
@@ -76,6 +89,10 @@ class OsamuStrategy(bt.Strategy):
                 # ゼロ割りエラーを防止
                 if risk_per_share > 0:
                     position_size = math.floor(max_loss_amount / risk_per_share)
+                    max_affordable = math.floor(
+                        (current_equity * 0.98) / self.data.close[0]
+                    )
+                    position_size = min(position_size, max_affordable)
 
                     if position_size > 0:
                         # ストップ価格と利益確定価格の計算
@@ -85,14 +102,14 @@ class OsamuStrategy(bt.Strategy):
                         # ブラケット注文 (Pineの strategy.exit に相当)
                         # エントリー注文の親に対し、利確・損切りの子注文を同時に紐づけます
                         entry_order = self.buy(size=position_size, transmit=False)
-                        self.sell(
+                        self.limit_order = self.sell(
                             size=position_size,
                             price=take_profit_price,
                             exectype=bt.Order.Limit,
                             parent=entry_order,
                             transmit=False,
                         )
-                        self.sell(
+                        self.stop_order = self.sell(
                             size=position_size,
                             price=stop_loss_price,
                             exectype=bt.Order.Stop,
@@ -106,9 +123,66 @@ class OsamuStrategy(bt.Strategy):
             if sell_signal:
                 # デッドクロスが発生した場合、保有中のポジションをすべて決済 (strategy.close に相当)
                 self.close()
+                if self.stop_order:
+                    self.cancel(self.stop_order)
+                if self.limit_order:
+                    self.cancel(self.limit_order)
+
+        # --- CSVデータの記録処理 ---
+        dt = current_date.strftime("%Y-%m-%d")
+        open_p = self.data.open[0]
+        high_p = self.data.high[0]
+        low_p = self.data.low[0]
+        close_p = self.data.close[0]
+        atr_val = self.atr[0]
+        short_ma_val = self.short_ma[0]
+        long_ma_val = self.long_ma[0]
+
+        # リストに1日分のデータを追加
+        self.log_data.append(
+            [
+                dt,
+                open_p,
+                high_p,
+                low_p,
+                close_p,
+                short_ma_val,
+                long_ma_val,
+                atr_val,
+                self.daily_buy_qty,
+                self.daily_sell_qty,
+            ]
+        )
+
+        # 記録が終わったら、翌日のために約定数をリセット
+        self.daily_buy_qty = 0
+        self.daily_sell_qty = 0
+
+    # バックテスト終了時に自動で呼び出されるメソッド
+    def stop(self):
+        # リストに貯めたデータをCSVファイルとして書き出し
+        with open("backtest_log.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            # ヘッダー行を書き込み
+            writer.writerow(
+                [
+                    "Date",
+                    "Open",
+                    "High",
+                    "Low",
+                    "Close",
+                    "Short_EMA",
+                    "Long_EMA",
+                    "ATR",
+                    "Buy_Qty",
+                    "Sell_Qty",
+                ]
+            )
+            # データを一括で書き込み
+            writer.writerows(self.log_data)
+        print("CSVファイルの出力が完了しました（backtest_log.csv）")
 
 
-# --- バックテストの実行環境設定 ---
 if __name__ == "__main__":
     setup_logging()
     cerebro = bt.Cerebro()

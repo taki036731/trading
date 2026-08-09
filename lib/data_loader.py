@@ -97,9 +97,9 @@ def _history(ticker: str, start: str | None = None) -> pd.DataFrame:
     """
     ticker_obj = yf.Ticker(ticker)
     if start is not None:
-        df = ticker_obj.history(start=start)
+        df = ticker_obj.history(start=start, auto_adjust=True)
     else:
-        df = ticker_obj.history(period="max")
+        df = ticker_obj.history(period="max", auto_adjust=True)
 
     # タイムゾーンを消去して日付操作を安定させる
     if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:

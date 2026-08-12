@@ -1,9 +1,12 @@
+import datetime
+
 import numpy as np
 import pandas as pd
 import pandas_ta as ta  # noqa: F401
 import vectorbt as vbt
 
 from lib import data_loader as dl
+from lib import data_saver as ds
 from lib import setup_logging
 
 
@@ -25,13 +28,16 @@ def run_vectorbt_backtest(df: pd.DataFrame):
     dead_cross = (df["short_ma"] < df["long_ma"]) & (
         df["short_ma"].shift(1) >= df["long_ma"].shift(1)
     )
+    start_date = datetime.datetime(2016, 6, 25)
+    end_date = datetime.datetime(2030, 12, 31)
+    in_date_range = (df.index >= start_date) & (df.index <= end_date)
 
     # ATR比率のフィルター (1.5% 〜 5.0%)
     df["atr_ratio"] = (df["atr"] / df["Close"]) * 100
     atr_condition = (df["atr_ratio"] >= 1.5) & (df["atr_ratio"] <= 5.0)
 
     # 最終的なエントリ・エグジットフラグ（True/Falseの配列）
-    entries = golden_cross & atr_condition
+    entries = golden_cross & atr_condition & in_date_range
     exits = dead_cross
 
     # ---------------------------------------------------------
@@ -65,7 +71,21 @@ def run_vectorbt_backtest(df: pd.DataFrame):
     print("-" * 40)
 
     # 取引履歴の詳細をCSVとして出力することも容易です
-    # portfolio.orders.records_readable.to_csv("vectorbt_orders.csv")
+    # portfolio.orders.records_readable.to_csv("vectorbt_orders.csv")  # type: ignore
+    # ds.write_df_to_sheet("Order", portfolio.orders.records_readable)  # type: ignore
+
+    # 指定期間（start_dateからend_date）でフィルタリングしてCSV出力
+    # df[(df.index >= start_date) & (df.index <= end_date)].to_csv("chart.csv")
+    # ds.write_df_to_sheet("Chart", df[(df.index >= start_date) & (df.index <= end_date)])
+
+    history_df = pd.merge(
+        df[(df.index >= start_date) & (df.index <= end_date)].reset_index(),
+        portfolio.orders.records_readable.rename(columns={"Timestamp": "Date"}),  # type: ignore
+        on="Date",
+        how="left",
+    )
+    history_df = history_df.fillna("")
+    ds.write_df_to_sheet("Chart", history_df)
 
     # 資産推移やドローダウンのチャートも1行で描画可能です
     # portfolio.plot().show()

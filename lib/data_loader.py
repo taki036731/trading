@@ -107,27 +107,3 @@ def _history(ticker: str, start: str | None = None) -> pd.DataFrame:
     df = df[["Open", "High", "Low", "Close", "Volume"]]
 
     return df
-
-
-def add_sma(
-    df: pd.DataFrame, window: int = 20, column_name: str | None = None
-) -> pd.DataFrame:
-    """データフレームに単純移動平均（SMA）を追加する。
-
-    Args:
-        df (pd.DataFrame): 株価データを含むデータフレーム。'Close'列が含まれている必要があります。
-        window (int): 移動平均を計算する期間。デフォルトは 20。
-        column_name (str | None, optional): 追加する列の名前。
-            指定しない場合は 'SMA_{window}' となります。デフォルトは None。
-
-    Returns:
-        pd.DataFrame: SMA列が追加されたデータフレーム。
-    """
-
-    if column_name is None:
-        column_name = f"SMA_{window}"
-
-    # pandasのrollingを使ってSMAを計算し、新しい列として追加
-    df[column_name] = df["Close"].rolling(window=window).mean()
-
-    return df

@@ -5,18 +5,19 @@ import pandas as pd
 import pandas_ta as ta  # noqa: F401
 import vectorbt as vbt
 
+import lib.strategies.indicator.abstract_indicator as ai
+import lib.strategies.indicator.atr_indicator as atr
+import lib.strategies.indicator.ma_indicator as ma
 from lib import data_loader as dl
-from lib import data_saver as ds
 from lib import setup_logging
 
 
-def run_vectorbt_backtest(df: pd.DataFrame):
+def run_vectorbt_backtest(indicators: list[ai.AbstractIndicator], df: pd.DataFrame):
     # ---------------------------------------------------------
     # 1. インジケーターの計算 (ベクトル演算で一括処理)
     # ---------------------------------------------------------
-    df["short_ma"] = df.ta.ema(length=5)
-    df["long_ma"] = df.ta.ema(length=20)
-    df["atr"] = df.ta.atr(length=15)
+    for indicator in indicators:
+        indicator.generate(df)
 
     # ---------------------------------------------------------
     # 2. シグナル生成 (論理演算で一括判定)
@@ -71,21 +72,22 @@ def run_vectorbt_backtest(df: pd.DataFrame):
     print("-" * 40)
 
     # 取引履歴の詳細をCSVとして出力することも容易です
-    # portfolio.orders.records_readable.to_csv("vectorbt_orders.csv")  # type: ignore
+    portfolio.orders.records_readable.to_csv("vectorbt_orders.csv")  # type: ignore
     # ds.write_df_to_sheet("Order", portfolio.orders.records_readable)  # type: ignore
 
     # 指定期間（start_dateからend_date）でフィルタリングしてCSV出力
     # df[(df.index >= start_date) & (df.index <= end_date)].to_csv("chart.csv")
     # ds.write_df_to_sheet("Chart", df[(df.index >= start_date) & (df.index <= end_date)])
 
-    history_df = pd.merge(
-        df[(df.index >= start_date) & (df.index <= end_date)].reset_index(),
-        portfolio.orders.records_readable.rename(columns={"Timestamp": "Date"}),  # type: ignore
-        on="Date",
-        how="left",
-    )
-    history_df = history_df.fillna("")
-    ds.write_df_to_sheet("Chart", history_df)
+    ## Google Spread Sheetに出力する場合
+    # history_df = pd.merge(
+    #     df[(df.index >= start_date) & (df.index <= end_date)].reset_index(),
+    #     portfolio.orders.records_readable.rename(columns={"Timestamp": "Date"}),  # type: ignore
+    #     on="Date",
+    #     how="left",
+    # )
+    # history_df = history_df.fillna("")
+    # ds.write_df_to_sheet("Chart", history_df)
 
     # 資産推移やドローダウンのチャートも1行で描画可能です
     # portfolio.plot().show()
@@ -113,4 +115,5 @@ if __name__ == "__main__":
     df = dl.fetch_stock_data("7203.T", start="2010-01-01")
 
     # バックテスト実行
-    run_vectorbt_backtest(df)
+    indicators = [ma.MAIndicator("EMA", 5, 20), atr.ATRIndicator(15)]
+    run_vectorbt_backtest(indicators, df)

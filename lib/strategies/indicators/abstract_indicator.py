@@ -20,7 +20,7 @@ class AbstractIndicator(ABC):
         self.params = kwargs
 
     @abstractmethod
-    def generate(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _calculate(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         株価データを受け取り、インジケータを計算・列追加して返す。
         子クラス（個別のアルゴリズム）で必ず上書き（オーバーライド）して実装する必要があります。
@@ -32,3 +32,14 @@ class AbstractIndicator(ABC):
             pd.DataFrame: 元のデータフレームに 'Signal' カラムを追加したもの
                           (1: 買いシグナル, -1: 売りシグナル, 0: シグナルなし)
         """
+
+    @property
+    @abstractmethod
+    def required_columns(self) -> list[str]:
+        pass
+
+    def generate(self, df: pd.DataFrame) -> pd.DataFrame:
+        for col in self.required_columns:
+            if col not in df.columns:
+                raise ValueError(f"エラー: 必須カラム'{col}'が存在しません。")
+        return self._calculate(df)

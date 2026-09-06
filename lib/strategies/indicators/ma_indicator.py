@@ -13,7 +13,11 @@ class MAIndicator(AbstractIndicator):
         self.short = short
         self.long = long
 
-    def generate(self, df: pd.DataFrame) -> pd.DataFrame:
+    @property
+    def required_columns(self) -> list[str]:
+        return ["Close"]
+
+    def _calculate(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         株価データを受け取り、インジケータを計算・列追加して返す。
         子クラス（個別のアルゴリズム）で必ず上書き（オーバーライド）して実装する必要があります。

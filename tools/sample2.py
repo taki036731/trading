@@ -5,9 +5,9 @@ import pandas as pd
 import pandas_ta as ta  # noqa: F401
 import vectorbt as vbt
 
-import lib.strategies.indicator.abstract_indicator as ai
-import lib.strategies.indicator.atr_indicator as atr
-import lib.strategies.indicator.ma_indicator as ma
+import lib.strategies.indicators.abstract_indicator as ai
+import lib.strategies.indicators.atr_indicator as atr
+import lib.strategies.indicators.ma_indicator as ma
 from lib import data_loader as dl
 from lib import setup_logging
 

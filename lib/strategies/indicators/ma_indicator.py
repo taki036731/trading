@@ -8,17 +8,18 @@ from .abstract_indicator import AbstractIndicator
 
 class MAIndicator(AbstractIndicator):
     """
-    EMA/SMAを計算するインジケータクラス。
+    EMA (指数平滑移動平均) または SMA (単純移動平均) を計算するインジケータクラス。
+    短期と長期の2本の移動平均線を計算します。
     """
 
     def __init__(self, method: Literal["EMA", "SMA"], short: int = 20, long: int = 75):
         """
-        パラメータの初期化。
+        MAIndicator を初期化します。
 
         Args:
-            method: 計算方法の選択('EMA' or 'SMA')
-            short: 短期MAの平均期間
-            long: 長期MAの平均期間
+            method (Literal["EMA", "SMA"]): 計算方法 ('EMA' または 'SMA')。
+            short (int): 短期移動平均の期間。デフォルトは 20。
+            long (int): 長期移動平均の期間。デフォルトは 75。
         """
         super().__init__(method=method, short=short, long=long)
         self.method = method
@@ -28,22 +29,25 @@ class MAIndicator(AbstractIndicator):
     @property
     def required_columns(self) -> list[str]:
         """
-        インジケータの計算に必要とされるカラム名のリストを定義します。
+        計算に必要なカラムを返します。
 
         Returns:
-            list[str]: 必須カラム名のリスト。['Close']
+            list[str]: ["Close"]
         """
         return ["Close"]
 
     def _calculate(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        株価データを受け取り、ATRを計算・列追加して返します。
+        移動平均を計算し、データフレームに 'short_ma' と 'long_ma' カラムを追加します。
 
         Args:
-            df (pd.DataFrame): 'Close' カラムを持つ株価データ。
+            df (pd.DataFrame): 'Close' カラムを含むデータフレーム。
 
         Returns:
-            pd.DataFrame: 元のデータフレームに計算結果('short_ma', 'long_ma')列を追加して返す。
+            pd.DataFrame: 'short_ma' と 'long_ma' カラムが追加されたデータフレーム。
+
+        Raises:
+            ValueError: 未対応の method が指定された場合。
         """
         if self.method == "EMA":
             df["short_ma"] = df.ta.ema(length=self.short)

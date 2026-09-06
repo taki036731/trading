@@ -4,6 +4,9 @@ from lib import setup_logging
 
 
 def main():
+    """
+    株価データを取得して表示するサンプルスクリプト。
+    """
     setup_logging()
 
     # Appleの株価

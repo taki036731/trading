@@ -8,38 +8,34 @@ import vectorbt as vbt
 import lib.strategies.indicators.abstract_indicator as ai
 import lib.strategies.indicators.atr_indicator as atr
 import lib.strategies.indicators.ma_indicator as ma
+import lib.strategies.signals.abstract_signal as abs
+import lib.strategies.signals.atr_condition_signal as ats
+import lib.strategies.signals.dead_cross_signal as dcs
+import lib.strategies.signals.golden_cross_signal as gcs
+import lib.strategies.signals.in_date_range_signal as drs
 from lib import data_loader as dl
 from lib import setup_logging
 
 
-def run_vectorbt_backtest(indicators: list[ai.AbstractIndicator], df: pd.DataFrame):
+def generate_signals(df: pd.DataFrame, signals: list[abs.AbstractSignal]) -> list:
+    retval = []
+    for s in signals:
+        r = s.generate(df)
+        retval.append(r)
+    return retval
+
+
+def run_vectorbt_backtest(
+    indicators: list[ai.AbstractIndicator],
+    entries: list[abs.AbstractSignal],
+    exits: list[abs.AbstractSignal],
+    df: pd.DataFrame,
+):
     # ---------------------------------------------------------
     # 1. インジケーターの計算 (ベクトル演算で一括処理)
     # ---------------------------------------------------------
     for indicator in indicators:
         indicator.generate(df)
-
-    # ---------------------------------------------------------
-    # 2. シグナル生成 (論理演算で一括判定)
-    # ---------------------------------------------------------
-    # ゴールデンクロス・デッドクロスの判定 (shift(1)で前日と比較)
-    golden_cross = (df["short_ma"] > df["long_ma"]) & (
-        df["short_ma"].shift(1) <= df["long_ma"].shift(1)
-    )
-    dead_cross = (df["short_ma"] < df["long_ma"]) & (
-        df["short_ma"].shift(1) >= df["long_ma"].shift(1)
-    )
-    start_date = datetime.datetime(2016, 6, 25)
-    end_date = datetime.datetime(2030, 12, 31)
-    in_date_range = (df.index >= start_date) & (df.index <= end_date)
-
-    # ATR比率のフィルター (1.5% 〜 5.0%)
-    df["atr_ratio"] = (df["atr"] / df["Close"]) * 100
-    atr_condition = (df["atr_ratio"] >= 1.5) & (df["atr_ratio"] <= 5.0)
-
-    # 最終的なエントリ・エグジットフラグ（True/Falseの配列）
-    entries = golden_cross & atr_condition & in_date_range
-    exits = dead_cross
 
     # ---------------------------------------------------------
     # 3. 動的な利確・損切り幅の設定
@@ -53,8 +49,8 @@ def run_vectorbt_backtest(indicators: list[ai.AbstractIndicator], df: pd.DataFra
     # ---------------------------------------------------------
     portfolio = vbt.Portfolio.from_signals(
         close=df["Close"],
-        entries=entries,
-        exits=exits,
+        entries=pd.concat(generate_signals(df, entries), axis=1).all(axis=1),
+        exits=pd.concat(generate_signals(df, exits), axis=1).all(axis=1),
         sl_stop=sl_pct,  # 動的ストップロスの配列
         tp_stop=tp_pct,  # 動的テイクプロフィットの配列
         init_cash=1000000.0,  # 初期資金
@@ -116,4 +112,12 @@ if __name__ == "__main__":
 
     # バックテスト実行
     indicators = [ma.MAIndicator("EMA", 5, 20), atr.ATRIndicator(15)]
-    run_vectorbt_backtest(indicators, df)
+    entries = [
+        gcs.GoldenCrossSignal(),
+        drs.InDateRangeSignal(
+            datetime.datetime(2016, 6, 25), datetime.datetime(2030, 12, 31)
+        ),
+        ats.ATRConditionSignal(1.5, 5),
+    ]
+    exits: list[abs.AbstractSignal] = [dcs.DeadCrossSignal()]
+    run_vectorbt_backtest(indicators, entries, exits, df)

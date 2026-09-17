@@ -5,14 +5,36 @@ from .abstract_signal import AbstractSignal
 
 
 class GoldenCrossSignal(AbstractSignal):
+    """
+    ゴールデンクロス（短期移動平均が長期移動平均を下から上に突き抜ける）を判定するシグナル。
+    """
+
     def __init__(self):
+        """
+        GoldenCrossSignal を初期化します。
+        """
         super().__init__()
 
     @property
     def required_columns(self) -> list[str]:
+        """
+        計算に必須なカラムを返します。
+
+        Returns:
+            list[str]: ["short_ma", "long_ma"]
+        """
         return ["short_ma", "long_ma"]
 
     def _calculate(self, df: pd.DataFrame) -> pd.Series:
+        """
+        ゴールデンクロスを判定します。
+
+        Args:
+            df (pd.DataFrame): 'short_ma' と 'long_ma' カラムを含むデータフレーム。
+
+        Returns:
+            pd.Series: ゴールデンクロスが発生した時点でTrueとなるブール値Series。
+        """
         return (df["short_ma"] > df["long_ma"]) & (
             df["short_ma"].shift(1) <= df["long_ma"].shift(1)
         )

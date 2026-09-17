@@ -6,13 +6,15 @@ from .abstract_position_sizer import AbstractPositionSizer
 
 class RiskPercentageSizer(AbstractPositionSizer):
     """
-    1トレードあたりの許容リスク（資産のn%）に基づいてポジションサイズを決定するクラス
+    1トレードあたりの許容リスク（資産のn%）に基づいてポジションサイズを決定するクラス。
     """
 
     def __init__(self, risk_per_trade: float = 0.02):
         """
+        RiskPercentageSizer を初期化します。
+
         Args:
-            risk_per_trade: 1トレードあたりの許容リスク（0.02 = 2%）
+            risk_per_trade (float): 1トレードあたりの許容リスク（0.02 = 2%）。
         """
         # 資産に対する割合で指定するため SizeType.Percent を使用
         super().__init__(size_type=SizeType.Percent, risk_per_trade=risk_per_trade)
@@ -20,13 +22,25 @@ class RiskPercentageSizer(AbstractPositionSizer):
 
     @property
     def required_columns(self) -> list[str]:
+        """
+        Returns:
+            list[str]: ["Close"]
+        """
         return ["Close"]
 
     def _calculate(self, df: pd.DataFrame, **kwargs) -> pd.Series:
         """
+        リスク許容度と損切り幅からポジションサイズ（資産に対する割合）を計算します。
+
         Args:
-            df: DataFrame
-            **kwargs: sl_pct (pd.Series) が必須
+            df (pd.DataFrame): 'Close' カラムを含むデータフレーム。
+            **kwargs: 'sl_pct' (pd.Series) が必須。エントリ時点の損切り幅（比率）。
+
+        Returns:
+            pd.Series: ポジションサイズ（資産に対する比率）。
+
+        Raises:
+            ValueError: 'sl_pct' が指定されていない場合。
         """
         sl_pct = kwargs.get("sl_pct")
         if sl_pct is None:

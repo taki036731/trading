@@ -14,6 +14,7 @@ from lib.strategies.exits import (
     AtrTakeProfit,
 )
 from lib.strategies.indicators import AbstractIndicator, ATRIndicator, MAIndicator
+from lib.strategies.position_sizing import AbstractPositionSizer, RiskPercentageSizer
 from lib.strategies.signals import (
     AbstractSignal,
     ATRConditionSignal,
@@ -37,6 +38,7 @@ def run_vectorbt_backtest(
     exits: list[AbstractSignal],
     tp: AbstractTakeProfit,
     sl: AbstractStopLoss,
+    position_sizer: AbstractPositionSizer,
     df: pd.DataFrame,
 ):
     # ---------------------------------------------------------
@@ -55,12 +57,19 @@ def run_vectorbt_backtest(
     # ---------------------------------------------------------
     # 4. バックテストの実行 (内部はC言語レベルで高速処理)
     # ---------------------------------------------------------
+    # ポジションサイズの計算
+    size = position_sizer.generate(df, sl_pct=sl_pct)
+
     portfolio = vbt.Portfolio.from_signals(
         close=df["Close"],
         entries=pd.concat(generate_signals(df, entries), axis=1).all(axis=1),
         exits=pd.concat(generate_signals(df, exits), axis=1).all(axis=1),
         sl_stop=sl_pct,  # 動的ストップロスの配列
         tp_stop=tp_pct,  # 動的テイクプロフィットの配列
+        size=size,
+        size_type=position_sizer.size_type,
+        size_granularity=100,  # 日本株固定ルール（100株単位）
+        min_size=100,  # 100株未満は注文しない
         init_cash=1000000.0,  # 初期資金
         fees=0.0,  # 手数料設定（必要に応じて）
         freq="D",  # 日足データ
@@ -119,20 +128,20 @@ if __name__ == "__main__":
     df = dl.fetch_stock_data("7203.T", start="2010-01-01")
 
     # バックテスト実行
-    indicators = [MAIndicator("EMA", 5, 20), ATRIndicator(15)]
     entries = [
         GoldenCrossSignal(),
         InDateRangeSignal(
             datetime.datetime(2016, 6, 25), datetime.datetime(2030, 12, 31)
         ),
-        ATRConditionSignal(1.5, 5),
+        ATRConditionSignal(lower=1.5, upper=5),
     ]
-    exits: list[AbstractSignal] = [DeadCrossSignal()]
+
     run_vectorbt_backtest(
-        indicators,
+        [MAIndicator("EMA", 5, 20), ATRIndicator(15)],
         entries,
-        exits,
+        [DeadCrossSignal()],
         AtrTakeProfit(4),
         AtrStopLoss(2),
+        RiskPercentageSizer(0.02),
         df,
     )

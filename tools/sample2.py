@@ -5,19 +5,25 @@ import pandas as pd
 import pandas_ta as ta  # noqa: F401
 import vectorbt as vbt
 
-import lib.strategies.indicators.abstract_indicator as ai
-import lib.strategies.indicators.atr_indicator as atr
-import lib.strategies.indicators.ma_indicator as ma
-import lib.strategies.signals.abstract_signal as abs
-import lib.strategies.signals.atr_condition_signal as ats
-import lib.strategies.signals.dead_cross_signal as dcs
-import lib.strategies.signals.golden_cross_signal as gcs
-import lib.strategies.signals.in_date_range_signal as drs
 from lib import data_loader as dl
 from lib import setup_logging
+from lib.strategies.exits import (
+    AbstractStopLoss,
+    AbstractTakeProfit,
+    AtrStopLoss,
+    AtrTakeProfit,
+)
+from lib.strategies.indicators import AbstractIndicator, ATRIndicator, MAIndicator
+from lib.strategies.signals import (
+    AbstractSignal,
+    ATRConditionSignal,
+    DeadCrossSignal,
+    GoldenCrossSignal,
+    InDateRangeSignal,
+)
 
 
-def generate_signals(df: pd.DataFrame, signals: list[abs.AbstractSignal]) -> list:
+def generate_signals(df: pd.DataFrame, signals: list[AbstractSignal]) -> list:
     retval = []
     for s in signals:
         r = s.generate(df)
@@ -26,9 +32,11 @@ def generate_signals(df: pd.DataFrame, signals: list[abs.AbstractSignal]) -> lis
 
 
 def run_vectorbt_backtest(
-    indicators: list[ai.AbstractIndicator],
-    entries: list[abs.AbstractSignal],
-    exits: list[abs.AbstractSignal],
+    indicators: list[AbstractIndicator],
+    entries: list[AbstractSignal],
+    exits: list[AbstractSignal],
+    tp: AbstractTakeProfit,
+    sl: AbstractStopLoss,
     df: pd.DataFrame,
 ):
     # ---------------------------------------------------------
@@ -41,8 +49,8 @@ def run_vectorbt_backtest(
     # 3. 動的な利確・損切り幅の設定
     # ---------------------------------------------------------
     # vectorbtの sl_stop / tp_stop には「現在の価格に対するパーセンテージ」を配列で渡せます
-    sl_pct = (df["atr"] * 2.0) / df["Close"]  # 損切り: ATRの2倍
-    tp_pct = (df["atr"] * 4.0) / df["Close"]  # 利確: ATRの4倍
+    sl_pct = sl.generate(df)
+    tp_pct = tp.generate(df)
 
     # ---------------------------------------------------------
     # 4. バックテストの実行 (内部はC言語レベルで高速処理)
@@ -111,13 +119,20 @@ if __name__ == "__main__":
     df = dl.fetch_stock_data("7203.T", start="2010-01-01")
 
     # バックテスト実行
-    indicators = [ma.MAIndicator("EMA", 5, 20), atr.ATRIndicator(15)]
+    indicators = [MAIndicator("EMA", 5, 20), ATRIndicator(15)]
     entries = [
-        gcs.GoldenCrossSignal(),
-        drs.InDateRangeSignal(
+        GoldenCrossSignal(),
+        InDateRangeSignal(
             datetime.datetime(2016, 6, 25), datetime.datetime(2030, 12, 31)
         ),
-        ats.ATRConditionSignal(1.5, 5),
+        ATRConditionSignal(1.5, 5),
     ]
-    exits: list[abs.AbstractSignal] = [dcs.DeadCrossSignal()]
-    run_vectorbt_backtest(indicators, entries, exits, df)
+    exits: list[AbstractSignal] = [DeadCrossSignal()]
+    run_vectorbt_backtest(
+        indicators,
+        entries,
+        exits,
+        AtrTakeProfit(4),
+        AtrStopLoss(2),
+        df,
+    )

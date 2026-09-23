@@ -1,3 +1,5 @@
+import logging
+
 import pandas as pd
 import vectorbt as vbt
 
@@ -6,6 +8,8 @@ from lib.strategies.exits import AbstractStopLoss, AbstractTakeProfit
 from lib.strategies.indicators import AbstractIndicator
 from lib.strategies.position_sizing import AbstractPositionSizer
 from lib.strategies.signals import AbstractSignal
+
+logger = logging.getLogger(__name__)
 
 
 class Backtester:
@@ -119,7 +123,9 @@ class Backtester:
         バックテストの結果サマリを表示します。
         """
         if self.portfolio is None:
-            print("バックテストが実行されていません。先に run() を呼び出してください。")
+            logger.warning(
+                "バックテストが実行されていません。先に run() を呼び出してください。"
+            )
             return
 
         print("-" * 40)
@@ -136,19 +142,24 @@ class Backtester:
             filename (str): 保存するファイル名。デフォルトは 'vectorbt_orders.csv'。
         """
         if self.portfolio is None:
-            print("バックテストが実行されていません。")
+            logger.warning("バックテストが実行されていません。")
             return
         # 取引履歴の詳細をCSVとして出力
         self.portfolio.orders.records_readable.to_csv(filename)  # type: ignore
-        print(f"注文履歴を {filename} に保存しました。")
+        logger.info(f"注文履歴を {filename} に保存しました。")
 
     def save_chart_to_sheet(self):
-        history_df = pd.merge(
-            self.portfolio.orders.records_readable.rename(  # type: ignore
-                columns={"Timestamp": "Date"}
-            ),  # type: ignore
-            on="Date",
-            how="left",
+        """
+        バックテストの取引履歴をスプレッドシートに保存します。
+
+        `lib.data_saver` を使用して、'Chart' シートに履歴データを出力します。
+        """
+        if self.portfolio is None:
+            logger.warning("バックテストが実行されていません。")
+            return
+
+        history_df = self.portfolio.orders.records_readable.rename(  # type: ignore
+            columns={"Timestamp": "Date"}
         )
         history_df = history_df.fillna("")
         ds.write_df_to_sheet("Chart", history_df)
@@ -161,7 +172,9 @@ class Backtester:
         バックテストの結果をチャートで表示します。
         """
         if self.portfolio is None:
-            print("バックテストが実行されていません。先に run() を呼び出してください。")
+            logger.warning(
+                "バックテストが実行されていません。先に run() を呼び出してください。"
+            )
             return
 
         self.portfolio.plot().show()  # type: ignore

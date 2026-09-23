@@ -1,11 +1,14 @@
 import csv
 import datetime
+import logging
 from typing import Any
 
 import backtrader as bt
 
 from lib import data_loader as dl
 from lib import setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 class OsamuStrategy(bt.Strategy):
@@ -83,7 +86,7 @@ class OsamuStrategy(bt.Strategy):
             )
             # データを一括で書き込み
             writer.writerows(self.log_data)
-        print("CSVファイルの出力が完了しました（backtest_log.csv）")
+        logger.info("CSVファイルの出力が完了しました（backtest_log.csv）")
 
 
 if __name__ == "__main__":
@@ -91,7 +94,7 @@ if __name__ == "__main__":
     cerebro = bt.Cerebro()
 
     # データの取得（例としてAppleの株価を使用。開始・終了日時を指定）
-    print("データをダウンロードしています...")
+    logger.info("データをダウンロードしています...")
     df = dl.fetch_stock_data("7203.T", start="2010-01-01")
     data = bt.feeds.PandasData(dataname=df)  # type: ignore
     cerebro.adddata(data)

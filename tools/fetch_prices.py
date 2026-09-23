@@ -1,6 +1,10 @@
 # from lib.stock_utils import fetch_stock_data
+import logging
+
 from lib import data_loader as dl
 from lib import setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 def main():
@@ -12,14 +16,14 @@ def main():
     # Appleの株価
 
     symbol = "AAPL"
-    print(f"{symbol} のデータを取得中...")
+    logger.info(f"{symbol} のデータを取得中...")
     df = dl.fetch_stock_data(symbol)
     df = dl.add_sma(df)
     print(df.tail())
 
     # トヨタの株価
     symbol_jp = "7203.T"
-    print(f"\n{symbol_jp} のデータを取得中...")
+    logger.info(f"\n{symbol_jp} のデータを取得中...")
     df_jp = dl.fetch_stock_data(symbol_jp)
     print(df_jp.tail())
 

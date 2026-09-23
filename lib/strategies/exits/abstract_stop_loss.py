@@ -24,12 +24,21 @@ class AbstractStopLoss(ABC):
     def required_columns(self) -> list[str]:
         """
         計算に必須なカラム名のリストを返します。
+
+        Returns:
+            list[str]: 必須カラム名のリスト。
         """
 
     @abstractmethod
     def _calculate(self, df: pd.DataFrame) -> pd.Series:
         """
         具体的な損切りしきい値（比率など）を計算します。
+
+        Args:
+            df (pd.DataFrame): 指標等を含むデータフレーム。
+
+        Returns:
+            pd.Series: 各時点の損切り幅（Closeに対する比率等）。
         """
 
     def generate(self, df: pd.DataFrame) -> pd.Series:

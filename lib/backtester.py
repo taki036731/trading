@@ -8,6 +8,13 @@ from lib.strategies.signals import AbstractSignal
 
 
 class Backtester:
+    """
+    売買戦略のバックテストを実行・管理するクラス。
+
+    インジケーターの計算、売買シグナルの生成、ポジションサイジング、
+    および vectorbt を使用したシミュレーションの実行を担います。
+    """
+
     def __init__(
         self,
         indicators: list[AbstractIndicator],
@@ -18,6 +25,18 @@ class Backtester:
         position_sizer: AbstractPositionSizer,
         init_cash: float = 1000000.0,
     ):
+        """
+        Backtester を初期化します。
+
+        Args:
+            indicators (list[AbstractIndicator]): 計算するインジケーターのリスト。
+            entries (list[AbstractSignal]): エントリー（買い）条件シグナルのリスト。
+            exits (list[AbstractSignal]): エグジット（売り）条件シグナルのリスト。
+            tp (AbstractTakeProfit): 利確ロジックの実装。
+            sl (AbstractStopLoss): 損切りロジックの実装。
+            position_sizer (AbstractPositionSizer): ポジションサイズ決定ロジック。
+            init_cash (float): 初期資金。デフォルトは 1,000,000.0。
+        """
         self.indicators = indicators
         self.entries = entries
         self.exits = exits
@@ -30,12 +49,36 @@ class Backtester:
     def _generate_signals(
         self, df: pd.DataFrame, signals: list[AbstractSignal]
     ) -> pd.Series:
+        """
+        複数のシグナル条件を統合し、すべてを満たす箇所を判定します。
+
+        Args:
+            df (pd.DataFrame): 株価および指標データ。
+            signals (list[AbstractSignal]): 判定するシグナルオブジェクトのリスト。
+
+        Returns:
+            pd.Series: すべての条件を満たす場合に True となるブール値Series。
+        """
         if not signals:
             return pd.Series(False, index=df.index)
         results = [s.generate(df) for s in signals]
         return pd.concat(results, axis=1).all(axis=1)
 
     def run(self, df: pd.DataFrame) -> vbt.Portfolio:
+        """
+        バックテストを実行します。
+
+        1. インジケーターの計算
+        2. 動的な利確・損切り幅の算出
+        3. ポジションサイズの決定
+        4. vectorbt によるシミュレーション実行
+
+        Args:
+            df (pd.DataFrame): バックテストに使用する株価データ。
+
+        Returns:
+            vbt.Portfolio: バックテスト結果を含む vectorbt の Portfolio オブジェクト。
+        """
         # ---------------------------------------------------------
         # 1. インジケーターの計算 (ベクトル演算で一括処理)
         # ---------------------------------------------------------
@@ -71,6 +114,9 @@ class Backtester:
         return self.portfolio
 
     def display_stats(self):
+        """
+        バックテストの結果サマリを表示します。
+        """
         if self.portfolio is None:
             print("バックテストが実行されていません。先に run() を呼び出してください。")
             return
@@ -82,6 +128,12 @@ class Backtester:
         print("-" * 40)
 
     def save_orders_to_csv(self, filename: str = "vectorbt_orders.csv"):
+        """
+        取引履歴をCSV形式で保存します。
+
+        Args:
+            filename (str): 保存するファイル名。デフォルトは 'vectorbt_orders.csv'。
+        """
         if self.portfolio is None:
             print("バックテストが実行されていません。")
             return

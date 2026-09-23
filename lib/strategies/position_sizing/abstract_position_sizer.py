@@ -25,6 +25,9 @@ class AbstractPositionSizer(ABC):
     def required_columns(self) -> list[str]:
         """
         計算に必須なカラム名のリストを返します。
+
+        Returns:
+            list[str]: 必須カラム名のリスト。
         """
 
     @abstractmethod
@@ -35,6 +38,9 @@ class AbstractPositionSizer(ABC):
         Args:
             df (pd.DataFrame): 株価データ。
             **kwargs: 計算に必要な追加情報（損切り幅 'sl_pct' など）。
+
+        Returns:
+            pd.Series: 各時点のポジションサイズ。
         """
 
     def generate(self, df: pd.DataFrame, **kwargs) -> pd.Series:

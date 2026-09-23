@@ -40,7 +40,9 @@ def run_vectorbt_backtest(
     sl: AbstractStopLoss,
     position_sizer: AbstractPositionSizer,
     df: pd.DataFrame,
-):
+    init_cash: float = 1000000.0,
+    verbose: bool = True,
+) -> vbt.Portfolio:
     # ---------------------------------------------------------
     # 1. インジケーターの計算 (ベクトル演算で一括処理)
     # ---------------------------------------------------------
@@ -62,15 +64,23 @@ def run_vectorbt_backtest(
 
     portfolio = vbt.Portfolio.from_signals(
         close=df["Close"],
-        entries=pd.concat(generate_signals(df, entries), axis=1).all(axis=1),
-        exits=pd.concat(generate_signals(df, exits), axis=1).all(axis=1),
+        entries=(
+            pd.concat(generate_signals(df, entries), axis=1).all(axis=1)
+            if entries
+            else pd.Series(False, index=df.index)
+        ),
+        exits=(
+            pd.concat(generate_signals(df, exits), axis=1).all(axis=1)
+            if exits
+            else pd.Series(False, index=df.index)
+        ),
         sl_stop=sl_pct,  # 動的ストップロスの配列
         tp_stop=tp_pct,  # 動的テイクプロフィットの配列
         size=size,
         size_type=position_sizer.size_type,
         size_granularity=100,  # 日本株固定ルール（100株単位）
         min_size=100,  # 100株未満は注文しない
-        init_cash=1000000.0,  # 初期資金
+        init_cash=init_cash,  # 初期資金
         fees=0.0,  # 手数料設定（必要に応じて）
         freq="D",  # 日足データ
     )
@@ -78,32 +88,17 @@ def run_vectorbt_backtest(
     # ---------------------------------------------------------
     # 5. 分析結果の出力
     # ---------------------------------------------------------
-    print("-" * 40)
-    print("【バックテスト結果サマリ】")
-    # 勝率、プロフィットファクター、ドローダウンなどが一括で計算されます
-    print(portfolio.stats())
-    print("-" * 40)
+    if verbose:
+        print("-" * 40)
+        print("【バックテスト結果サマリ】")
+        # 勝率、プロフィットファクター、ドローダウンなどが一括で計算されます
+        print(portfolio.stats())
+        print("-" * 40)
 
-    # 取引履歴の詳細をCSVとして出力することも容易です
-    portfolio.orders.records_readable.to_csv("vectorbt_orders.csv")  # type: ignore
-    # ds.write_df_to_sheet("Order", portfolio.orders.records_readable)  # type: ignore
+        # 取引履歴の詳細をCSVとして出力することも容易です
+        portfolio.orders.records_readable.to_csv("vectorbt_orders.csv")  # type: ignore
 
-    # 指定期間（start_dateからend_date）でフィルタリングしてCSV出力
-    # df[(df.index >= start_date) & (df.index <= end_date)].to_csv("chart.csv")
-    # ds.write_df_to_sheet("Chart", df[(df.index >= start_date) & (df.index <= end_date)])
-
-    ## Google Spread Sheetに出力する場合
-    # history_df = pd.merge(
-    #     df[(df.index >= start_date) & (df.index <= end_date)].reset_index(),
-    #     portfolio.orders.records_readable.rename(columns={"Timestamp": "Date"}),  # type: ignore
-    #     on="Date",
-    #     how="left",
-    # )
-    # history_df = history_df.fillna("")
-    # ds.write_df_to_sheet("Chart", history_df)
-
-    # 資産推移やドローダウンのチャートも1行で描画可能です
-    # portfolio.plot().show()
+    return portfolio
 
 
 if __name__ == "__main__":

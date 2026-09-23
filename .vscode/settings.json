@@ -11,5 +11,18 @@
       // 使っていないimportの自動削除や、アルファベット順の並び替えを行います
       "source.organizeImports.ruff": "explicit"
     }
-  }
+  },
+  "python.testing.unittestArgs": [
+    "-v",
+    "-s",
+    "./tests",
+    "-p",
+    "test_*.py"
+  ],
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.nosetestsEnabled": false,
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}"
+  ]
 }

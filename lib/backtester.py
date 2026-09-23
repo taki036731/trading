@@ -50,6 +50,9 @@ class Backtester:
         self.position_sizer = position_sizer
         self.init_cash = init_cash
         self.portfolio: vbt.Portfolio | None = None
+        self.df: pd.DataFrame | None = None
+        self.entries_series: pd.Series | None = None
+        self.exits_series: pd.Series | None = None
 
     def _generate_signals(
         self, df: pd.DataFrame, signals: list[AbstractSignal]
@@ -96,6 +99,15 @@ class Backtester:
         sl_pct = self.sl.generate(df)
         tp_pct = self.tp.generate(df)
 
+        # エントリーとエグジットのシグナルを生成
+        entries = self._generate_signals(df, self.entries)
+        exits = self._generate_signals(df, self.exits)
+
+        # 状態を保持 (参照のみ)
+        self.df = df
+        self.entries_series = entries
+        self.exits_series = exits
+
         # ---------------------------------------------------------
         # 3. バックテストの実行
         # ---------------------------------------------------------
@@ -104,8 +116,8 @@ class Backtester:
 
         self.portfolio = vbt.Portfolio.from_signals(
             close=df["Close"],
-            entries=self._generate_signals(df, self.entries),
-            exits=self._generate_signals(df, self.exits),
+            entries=entries,
+            exits=exits,
             sl_stop=sl_pct,  # 動的ストップロスの配列
             tp_stop=tp_pct,  # 動的テイクプロフィットの配列
             size=size,
@@ -120,7 +132,7 @@ class Backtester:
 
     def display_stats(self):
         """
-        バックテストの結果サマリを表示します。
+        バックテストの結果サマリと最新の注文履歴を表示します。
         """
         if self.portfolio is None:
             logger.warning(
@@ -132,6 +144,10 @@ class Backtester:
         print("【バックテスト結果サマリ】")
         # 勝率、プロフィットファクター、ドローダウンなどが一括で計算されます
         print(self.portfolio.stats())
+        print("-" * 40)
+        print("【最新の注文履歴】")
+        # 最新5件を表示
+        print(self.portfolio.orders.records_readable.tail(5))  # type: ignore
         print("-" * 40)
 
     def save_orders_to_csv(self, filename: str = "vectorbt_orders.csv"):
@@ -150,22 +166,85 @@ class Backtester:
 
     def save_chart_to_sheet(self):
         """
-        バックテストの取引履歴をスプレッドシートに保存します。
+        価格、指標、シグナル、売買履歴を結合した一時的なテーブルを作成し、
+        スプレッドシートの 'Chart' シートに保存します。
+        """
+        if (
+            self.portfolio is None
+            or self.df is None
+            or self.entries_series is None
+            or self.exits_series is None
+        ):
+            logger.warning("バックテストが実行されていません。")
+            return
 
-        `lib.data_saver` を使用して、'Chart' シートに履歴データを出力します。
+        # 1. 注文履歴を日付で集約
+        orders = self.portfolio.orders.records_readable.copy()  # type: ignore
+        orders["Timestamp"] = pd.to_datetime(orders["Timestamp"])
+
+        # 売買代金 (Value) を算出
+        orders["Value"] = orders["Size"] * orders["Price"]
+
+        # 同じ日に複数注文がある可能性を考慮して集約
+        order_summary = orders.groupby("Timestamp").agg(
+            {
+                "Size": "sum",
+                "Value": "sum",
+                "Side": lambda x: ",".join(x.astype(str).unique()),
+            }
+        )
+
+        # 加重平均価格を算出 (Total Value / Total Size)
+        order_summary["Price"] = order_summary["Value"] / order_summary["Size"]
+
+        # カラム名の整理
+        order_summary = order_summary.rename(
+            columns={
+                "Size": "exec_size",
+                "Price": "exec_price",
+                "Value": "exec_value",
+                "Side": "exec_side",
+            }
+        )[["exec_size", "exec_price", "exec_value", "exec_side"]]
+
+        # 2. データをこの瞬間だけ結合
+        export_df = pd.concat(
+            [
+                self.df,
+                self.entries_series.rename("entry_signal"),
+                self.exits_series.rename("exit_signal"),
+                order_summary,
+            ],
+            axis=1,
+        )
+
+        # 3. スプレッドシートに書き込み
+        ds.write_df_to_sheet("Chart", export_df.fillna(""), include_index=True)
+        logger.info("売買履歴を含む時系列データを 'Chart' シートに保存しました。")
+
+    def save_orders_to_sheet(self, sheet_name: str = "Orders"):
+        """
+        詳細な注文履歴をスプレッドシートに保存します。
         """
         if self.portfolio is None:
             logger.warning("バックテストが実行されていません。")
             return
 
-        history_df = self.portfolio.orders.records_readable.rename(  # type: ignore
-            columns={"Timestamp": "Date"}
-        )
-        history_df = history_df.fillna("")
-        ds.write_df_to_sheet("Chart", history_df)
+        df = self.portfolio.orders.records_readable  # type: ignore
+        ds.write_df_to_sheet(sheet_name, df, include_index=False)
+        logger.info(f"注文履歴を '{sheet_name}' シートに保存しました。")
 
-        # 資産推移やドローダウンのチャートも1行で描画可能です
-        # portfolio.plot().show()
+    def save_trades_to_sheet(self, sheet_name: str = "Trades"):
+        """
+        取引履歴（エントリーからエグジットまでの一連の結果）をスプレッドシートに保存します。
+        """
+        if self.portfolio is None:
+            logger.warning("バックテストが実行されていません。")
+            return
+
+        df = self.portfolio.trades.records_readable  # type: ignore
+        ds.write_df_to_sheet(sheet_name, df, include_index=False)
+        logger.info(f"取引履歴を '{sheet_name}' シートに保存しました。")
 
     def show(self):
         """

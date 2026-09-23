@@ -42,7 +42,7 @@ def _initialize():
         _logger.info("接続が完了しました。")
 
 
-def write_df_to_sheet(sheet_name: str, df: pd.DataFrame):
+def write_df_to_sheet(sheet_name: str, df: pd.DataFrame, include_index: bool = False):
     """
     指定されたシート名に Pandas DataFrame を書き込みます。
 
@@ -52,6 +52,7 @@ def write_df_to_sheet(sheet_name: str, df: pd.DataFrame):
     Args:
         sheet_name (str): 書き込み対象のシート名。
         df (pd.DataFrame): 書き込むデータを含む DataFrame。
+        include_index (bool): インデックスを書き込むかどうか。デフォルトは False。
 
     Raises:
         ValueError: スプレッドシートの初期化に失敗した場合に発生します。
@@ -72,5 +73,5 @@ def write_df_to_sheet(sheet_name: str, df: pd.DataFrame):
         _logger.error("シートが作成できませんでした。")
 
     worksheet.clear()
-    set_with_dataframe(worksheet, df)
+    set_with_dataframe(worksheet, df, include_index=include_index)
     _logger.info(f"'{sheet_name}' シートの更新が完了しました。")

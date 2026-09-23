@@ -1,3 +1,4 @@
+anywidget==0.11.0
 asttokens==3.0.2
 backtrader==1.9.78.123
 beautifulsoup4==4.15.0
@@ -21,6 +22,7 @@ gspread==6.2.1
 gspread-dataframe==4.0.0
 idna==3.18
 imageio==2.37.4
+iniconfig==2.3.0
 ipython==9.16.1
 ipython-pygments-lexers==1.1.1
 ipywidgets==8.1.8
@@ -47,9 +49,11 @@ pillow==12.3.0
 pip==26.1.2
 platformdirs==4.11.1
 plotly==6.9.0
+pluggy==1.6.0
 prompt-toolkit==3.0.53
 protobuf==7.35.1
 psutil==7.2.2
+psygnal==0.16.1
 ptyprocess==0.7.0
 pure-eval==0.2.3
 pyarrow==25.0.0
@@ -58,6 +62,7 @@ pyasn1-modules==0.4.2
 pycparser==3.0
 pygments==2.20.0
 pyparsing==3.3.2
+pytest==9.1.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 pytz==2026.3.post1

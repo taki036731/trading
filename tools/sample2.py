@@ -41,3 +41,4 @@ if __name__ == "__main__":
     backtester.run(df)
     backtester.display_stats()
     backtester.save_orders_to_csv()
+    backtester.show()

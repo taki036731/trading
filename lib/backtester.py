@@ -1,6 +1,7 @@
 import pandas as pd
 import vectorbt as vbt
 
+import lib.data_saver as ds
 from lib.strategies.exits import AbstractStopLoss, AbstractTakeProfit
 from lib.strategies.indicators import AbstractIndicator
 from lib.strategies.position_sizing import AbstractPositionSizer
@@ -140,3 +141,27 @@ class Backtester:
         # 取引履歴の詳細をCSVとして出力
         self.portfolio.orders.records_readable.to_csv(filename)  # type: ignore
         print(f"注文履歴を {filename} に保存しました。")
+
+    def save_chart_to_sheet(self):
+        history_df = pd.merge(
+            self.portfolio.orders.records_readable.rename(  # type: ignore
+                columns={"Timestamp": "Date"}
+            ),  # type: ignore
+            on="Date",
+            how="left",
+        )
+        history_df = history_df.fillna("")
+        ds.write_df_to_sheet("Chart", history_df)
+
+        # 資産推移やドローダウンのチャートも1行で描画可能です
+        # portfolio.plot().show()
+
+    def show(self):
+        """
+        バックテストの結果をチャートで表示します。
+        """
+        if self.portfolio is None:
+            print("バックテストが実行されていません。先に run() を呼び出してください。")
+            return
+
+        self.portfolio.plot().show()  # type: ignore

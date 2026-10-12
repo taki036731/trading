@@ -96,10 +96,14 @@ class Backtester:
         # ---------------------------------------------------------
         # 2. 動的な利確・損切り幅の設定
         # ---------------------------------------------------------
-        sl_pct = self.sl.generate(df)
-        tp_pct = self.tp.generate(df)
+        # 前日の終値を基に、翌日の損切り・利確%を決める。
+        # そのため、StopLoss / TakeProfit のパーセンテージを「翌日約定用」にシフトする
+        sl_pct = self.sl.generate(df).shift(1).fillna(0.0)
+        tp_pct = self.tp.generate(df).shift(1).fillna(0.0)
 
-        # エントリーとエグジットのシグナルを生成
+        # ---------------------------------------------------------
+        # 3. エントリーとエグジットのシグナルを生成
+        # ---------------------------------------------------------
         entries = self._generate_signals(df, self.entries)
         exits = self._generate_signals(df, self.exits)
 
@@ -109,15 +113,20 @@ class Backtester:
         self.exits_series = exits
 
         # ---------------------------------------------------------
-        # 3. バックテストの実行
+        # 4. ポジションサイズの計算
         # ---------------------------------------------------------
-        # ポジションサイズの計算
+        # サイズ計算にもDay TのSL%を渡す(shift(1)した配列を渡す)
         size = self.position_sizer.generate(df, sl_pct=sl_pct)
 
+        # ---------------------------------------------------------
+        # 5. バックテストの実行
+        # ---------------------------------------------------------
         self.portfolio = vbt.Portfolio.from_signals(
             close=df["Close"],
             entries=entries,
             exits=exits,
+            price=df["Open"],
+            direction="longonly",
             sl_stop=sl_pct,  # 動的ストップロスの配列
             tp_stop=tp_pct,  # 動的テイクプロフィットの配列
             size=size,

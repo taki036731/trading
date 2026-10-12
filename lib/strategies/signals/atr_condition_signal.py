@@ -43,4 +43,8 @@ class ATRConditionSignal(AbstractSignal):
             pd.Series: 判定結果のブール値Series。
         """
         df["atr_ratio"] = (df["atr"] / df["Close"]) * 100
-        return (df["atr_ratio"] >= self.lower) & (df["atr_ratio"] <= self.upper)
+        return (
+            ((df["atr_ratio"] >= self.lower) & (df["atr_ratio"] <= self.upper))
+            .shift(1)
+            .fillna(False)
+        )

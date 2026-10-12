@@ -12,20 +12,25 @@
 				"MS-CEINTL.vscode-language-pack-ja",
 				"ms-python.python",
 				"charliermarsh.ruff",
-				"lfs.vscode-emacs-friendly"
+				"lfs.vscode-emacs-friendly",
+				"anthropic.claude-code"
 			]
 		}
 	},
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {},
+	"features": {
+		"ghcr.io/devcontainers/features/node:2.1.1": {
+			"version": "20"
+		}		
+	},
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
 	// "postCreateCommand": "pip3 install --user -r requirements.txt",
-	"postCreateCommand": "if [ -f requirements.txt ]; then sudo uv pip install --system -r requirements.txt; fi"
+	"postCreateCommand": "bash .devcontainer/setup.sh"
 
 	// Configure tool-specific properties.
 	// "customizations": {},

@@ -29,7 +29,7 @@ jobs:
           done
 
       - name: Google Driveへアップロード
-        uses: adityak74/google-drive-upload-action@main
+        uses: adityak74/google-drive-upload-git-action@main
         with:
           credentials: ${{ secrets.GDRIVE_CREDENTIALS_DATA }}
           filename: latest_code.md

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main # mainブランチにPushされた時に作動します
+  workflow_dispatch:
 
 jobs:
   export-and-upload:

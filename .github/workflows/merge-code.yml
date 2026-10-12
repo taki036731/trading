@@ -1,0 +1,37 @@
+name: Sync Code to Google Drive for Gemini
+
+on:
+  push:
+    branches:
+      - main # mainブランチにPushされた時に作動します
+
+jobs:
+  export-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: リポジトリのチェックアウト
+        uses: actions/checkout@v4
+
+      - name: ソースコードの結合（Markdown化）
+        run: |
+          echo "# 最新ソースコードまとめ" > latest_code.md
+          echo "更新日時: $(date +'%Y-%m-%d %H:%M:%S')" >> latest_code.md
+          echo "" >> latest_code.md
+
+          # 結合対象の拡張子を指定（PythonやSQLなどを想定）
+          # 必要に応じて "*.cs" や "*.ts" などを追加・変更してください
+          find . -type f \( -name "*.py" -o -name "*.sql" \) -not -path "*/venv/*" -not -path "*/.git/*" | while read file; do
+            echo "## ファイル: $file" >> latest_code.md
+            echo '```' >> latest_code.md
+            cat "$file" >> latest_code.md
+            echo '```' >> latest_code.md
+            echo "" >> latest_code.md
+          done
+
+      - name: Google Driveへアップロード
+        uses: adityak74/google-drive-upload-action@main
+        with:
+          credentials: ${{ secrets.GDRIVE_CREDENTIALS_DATA }}
+          filename: latest_code.md
+          folderId: ${{ vars.GDRIVE_FOLDER_ID }}
+          overwrite: "true" # 常に同じファイルを上書きして最新状態を保ちます

@@ -13,9 +13,6 @@ jobs:
       - name: リポジトリのチェックアウト
         uses: actions/checkout@v4
 
-      - name: Setup Rclone
-        uses: rclone/rclone-action@v1
-
       - name: ソースコードの結合（Markdown化）
         run: |
           echo "# 最新ソースコードまとめ" > latest_code.md
@@ -32,11 +29,8 @@ jobs:
             echo "" >> latest_code.md
           done
 
-      - name: Create rclone.conf
-        run: |
-          mkdir -p ~/.config/rclone
-          echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
-
       - name: Google Driveへアップロード
-        run: |
-          rclone copy latest_code.md gdrive:${{ vars.GDRIVE_FOLDER_PATH }}
+        uses: AnimMouse/setup-rclone@v1
+        with:
+          rclone_config: ${{ secrets.RCLONE_CONF }}
+      - run: rclone copy latest_code.md gdrive:${{ vars.GDRIVE_FOLDER_PATH }}

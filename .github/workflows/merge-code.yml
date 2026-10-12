@@ -29,10 +29,11 @@ jobs:
             echo "" >> latest_code.md
           done
 
+      - name: Create rclone.conf
+        run: |
+          mkdir -p ~/.config/rclone
+          echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+
       - name: Google Driveへアップロード
-        uses: adityak74/google-drive-upload-git-action@main
-        with:
-          credentials: ${{ secrets.GDRIVE_CREDENTIALS_DATA }}
-          filename: latest_code.md
-          folderId: ${{ vars.GDRIVE_FOLDER_ID }}
-          overwrite: "true" # 常に同じファイルを上書きして最新状態を保ちます
+        run: |
+          rclone copy latest_code.md gdrive:${{ vars.GDRIVE_FOLDER_PATH }}

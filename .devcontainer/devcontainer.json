@@ -13,7 +13,8 @@
 				"ms-python.python",
 				"charliermarsh.ruff",
 				"lfs.vscode-emacs-friendly",
-				"anthropic.claude-code"
+				"anthropic.claude-code",
+				"github.vscode-github-actions"
 			]
 		}
 	},

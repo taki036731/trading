@@ -41,9 +41,9 @@ def test_golden_cross_and_take_profit():
     trades = portfolio.trades.records
     assert len(trades) == 1, "取引が1回行われるはず"
 
-    # vectorbtはシグナルの翌日にエントリーする設定(デフォルト)
-    # 10日目にシグナル -> 11日目にエントリー
-    assert trades.entry_idx[0] == 10  # 0-indexed なので 10 は 11日目
+    # クロス系シグナルは shift(1) されるため、シグナルの翌日にエントリーする
+    # index=10 の終値でクロス確定 -> index=11 の始値でエントリー
+    assert trades.entry_idx[0] == 11
 
     # 利確されているか (ExitType 1 が Profit Stop)
     # vbtの内部コードにより異なるが、プロフィットがプラスであることを確認

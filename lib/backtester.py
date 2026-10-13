@@ -123,12 +123,20 @@ class Backtester:
         # ---------------------------------------------------------
         self.portfolio = vbt.Portfolio.from_signals(
             close=df["Close"],
+            # SL/TP をザラ場の値動きで判定するために OHLC を渡す。
+            # 渡さないと終値だけで判定され、約定価格も終値になってしまう
+            open=df["Open"],
+            high=df["High"],
+            low=df["Low"],
             entries=entries,
             exits=exits,
             price=df["Open"],
             direction="longonly",
             sl_stop=sl_pct,  # 動的ストップロスの配列
             tp_stop=tp_pct,  # 動的テイクプロフィットの配列
+            # SL/TP ラインの基準を約定価格(始値)にする。
+            # 既定値はエントリー日の終値で、想定したラインからずれる
+            stop_entry_price="fillprice",
             size=size,
             size_type=self.position_sizer.size_type,
             size_granularity=100,  # 日本株固定ルール（100株単位）

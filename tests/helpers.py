@@ -29,3 +29,21 @@ def create_base_df(
     df["atr"] = 20.0
 
     return df
+
+
+def create_random_walk_df(
+    days: int = 300, seed: int = 0, start_date: str = "2020-01-01"
+) -> pd.DataFrame:
+    """
+    インジケーター計算から通しで動かすテスト用に、ランダムウォークの OHLC を作る。
+    営業日（土日除く）のインデックスで、指標の列は含まない。
+    """
+    rng = np.random.default_rng(seed)
+    dates = pd.bdate_range(start_date, periods=days)
+    close = 1000 * np.exp(np.cumsum(rng.normal(0, 0.02, days)))
+    open_ = close * (1 + rng.normal(0, 0.005, days))
+    high = np.maximum(open_, close) * (1 + rng.uniform(0, 0.01, days))
+    low = np.minimum(open_, close) * (1 - rng.uniform(0, 0.01, days))
+    return pd.DataFrame(
+        {"Open": open_, "High": high, "Low": low, "Close": close}, index=dates
+    )

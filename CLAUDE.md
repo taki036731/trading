@@ -72,6 +72,17 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
    - `price=df["Open"]`(翌日始値で約定)
    - `fees=0.0`(**意図的な暫定値**。将来、手数料・スリッページを導入する予定)
 
+`run()` は `prepare(df)`(上記 1〜4 を行い、`PreparedSignals` を返す)と `from_signals` の呼び出しに分かれている。日本市場向けの固定条件は `JP_MARKET_PARAMS` にまとめてある。
+
+### 複数銘柄・パラメータグリッド(`lib/multi_backtester.py`)
+
+`MultiBacktester(factory, param_grid)` は、パラメータを受け取って新しい `Backtester` を返す関数(factory)を使って、複数銘柄を一括で検証する。
+
+- `run_independent(data)`: 銘柄 × パラメータの全組み合わせを独立した口座で実行し、1行1実行の指標の DataFrame を返す。CAGR・シャープレシオは、営業日の本数から求めた1年あたりの本数で年率換算する
+- `aggregate(summary)`: パラメータごとに銘柄横断の中央値・平均・プラス銘柄の割合を出す
+- `run_portfolio(data, params)`: 全銘柄を1つの口座(`cash_sharing=True`、`call_seq="auto"`)で運用する。`SizeType.Percent` のサイザーは**現金残高**に対する割合になる。同じ日に買いが重なり現金が足りない場合は、`data` の銘柄の並び順で先着
+- `load_universe(tickers, start, end)`: `fetch_stock_data` を銘柄ごとに呼んで `{ticker: df}` を返す
+
 ### 戦略コンポーネント(`lib/strategies/`)
 
 全てのコンポーネントは同じテンプレートメソッドパターンで作られている。`AbstractX` 基底クラスが `required_columns`(抽象プロパティ)と `_calculate()`(抽象メソッド)を定義し、公開メソッドの `generate()` が必要な列の存在を検証してから `_calculate()` に処理を渡す。
@@ -90,6 +101,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 
 ### エントリーポイント・テスト
 
+- `tools/strategy01_multi.py`: strategy01 を複数銘柄 × 小さなパラメータグリッドで回すサンプル(CSV のみ出力)
 - `tools/strategy01.py`: 基準となるサンプル。EMA 5/20 のゴールデン/デッドクロス、期間フィルター、ATR のボラティリティフィルター、ATR ベースの損切り/利確、リスク割合サイジングを組み合わせ、`7203.T`(トヨタ)に対して実行する。新しい戦略スクリプトを `tools/` に作るときのテンプレートとして使う
 - `tools/fetch_prices.py` / `sample/from_pine.py`: 古いスクリプト。`lib/data_loader.py` に存在しない関数(例: `dl.add_sma`)を参照している可能性があるため、最新の実装として扱わない
 - `tests/helpers.py` の `create_base_df()`: 戦略のテスト用に、`short_ma` / `long_ma` / `atr` の列があらかじめ入った合成 OHLC の DataFrame を作る(indicator のステップを通さない)

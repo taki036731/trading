@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 
 import pandas as pd
 import vectorbt as vbt
@@ -10,6 +11,52 @@ from lib.strategies.position_sizing import AbstractPositionSizer
 from lib.strategies.signals import AbstractSignal
 
 logger = logging.getLogger(__name__)
+
+# 日本株向けの約定ルール。単一銘柄・複数銘柄のどちらのバックテストでも同じ値を使う
+JP_MARKET_PARAMS = {
+    "direction": "longonly",
+    "size_granularity": 100,  # 日本株固定ルール（100株単位）
+    "min_size": 100,  # 100株未満は注文しない
+    "fees": 0.0,  # 手数料設定（暫定値。将来、手数料・スリッページを導入予定）
+    "freq": "D",  # 日足データ
+}
+
+
+@dataclass
+class PreparedSignals:
+    """
+    vectorbt の from_signals に渡す入力一式。
+
+    単一銘柄では各属性が pd.Series、複数銘柄（資金共有モード）では
+    列=銘柄の pd.DataFrame になります。
+    """
+
+    close: pd.Series | pd.DataFrame
+    price: pd.Series | pd.DataFrame  # 約定価格（翌日始値）
+    entries: pd.Series | pd.DataFrame
+    exits: pd.Series | pd.DataFrame
+    sl_stop: pd.Series | pd.DataFrame  # シフト済みの損切り幅（比率）
+    tp_stop: pd.Series | pd.DataFrame  # シフト済みの利確幅（比率）
+    size: pd.Series | pd.DataFrame
+    size_type: int
+
+    def to_vbt_kwargs(self) -> dict:
+        """
+        from_signals のキーワード引数に変換します。
+
+        Returns:
+            dict: close / price / entries / exits / sl_stop / tp_stop / size / size_type。
+        """
+        return {
+            "close": self.close,
+            "price": self.price,
+            "entries": self.entries,
+            "exits": self.exits,
+            "sl_stop": self.sl_stop,
+            "tp_stop": self.tp_stop,
+            "size": self.size,
+            "size_type": self.size_type,
+        }
 
 
 class Backtester:
@@ -72,20 +119,22 @@ class Backtester:
         results = [s.generate(df) for s in signals]
         return pd.concat(results, axis=1).all(axis=1)
 
-    def run(self, df: pd.DataFrame) -> vbt.Portfolio:
+    def prepare(self, df: pd.DataFrame) -> PreparedSignals:
         """
-        バックテストを実行します。
+        シミュレーションの直前までの処理を行い、vectorbt に渡す入力をまとめて返します。
 
         1. インジケーターの計算
-        2. 動的な利確・損切り幅の算出
-        3. ポジションサイズの決定
-        4. vectorbt によるシミュレーション実行
+        2. 動的な利確・損切り幅の算出（翌日約定用に1日シフト）
+        3. エントリー・エグジットのシグナル生成
+        4. ポジションサイズの決定
+
+        複数銘柄を一括で検証する MultiBacktester からも、この処理を共通で使います。
 
         Args:
-            df (pd.DataFrame): バックテストに使用する株価データ。
+            df (pd.DataFrame): バックテストに使用する株価データ（インジケーターの列が追加されます）。
 
         Returns:
-            vbt.Portfolio: バックテスト結果を含む vectorbt の Portfolio オブジェクト。
+            PreparedSignals: from_signals に渡す価格・シグナル・SL/TP・サイズ。
         """
         # ---------------------------------------------------------
         # 1. インジケーターの計算 (ベクトル演算で一括処理)
@@ -107,35 +156,46 @@ class Backtester:
         entries = self._generate_signals(df, self.entries)
         exits = self._generate_signals(df, self.exits)
 
-        # 状態を保持 (参照のみ)
-        self.df = df
-        self.entries_series = entries
-        self.exits_series = exits
-
         # ---------------------------------------------------------
         # 4. ポジションサイズの計算
         # ---------------------------------------------------------
         # サイズ計算にもDay TのSL%を渡す(shift(1)した配列を渡す)
         size = self.position_sizer.generate(df, sl_pct=sl_pct)
 
-        # ---------------------------------------------------------
-        # 5. バックテストの実行
-        # ---------------------------------------------------------
-        self.portfolio = vbt.Portfolio.from_signals(
+        return PreparedSignals(
             close=df["Close"],
+            price=df["Open"],
             entries=entries,
             exits=exits,
-            price=df["Open"],
-            direction="longonly",
-            sl_stop=sl_pct,  # 動的ストップロスの配列
-            tp_stop=tp_pct,  # 動的テイクプロフィットの配列
+            sl_stop=sl_pct,
+            tp_stop=tp_pct,
             size=size,
             size_type=self.position_sizer.size_type,
-            size_granularity=100,  # 日本株固定ルール（100株単位）
-            min_size=100,  # 100株未満は注文しない
+        )
+
+    def run(self, df: pd.DataFrame) -> vbt.Portfolio:
+        """
+        バックテストを実行します。
+
+        prepare() で作った入力を vectorbt に渡してシミュレーションします。
+
+        Args:
+            df (pd.DataFrame): バックテストに使用する株価データ。
+
+        Returns:
+            vbt.Portfolio: バックテスト結果を含む vectorbt の Portfolio オブジェクト。
+        """
+        prepared = self.prepare(df)
+
+        # 状態を保持 (参照のみ)
+        self.df = df
+        self.entries_series = prepared.entries
+        self.exits_series = prepared.exits
+
+        self.portfolio = vbt.Portfolio.from_signals(
+            **prepared.to_vbt_kwargs(),
             init_cash=self.init_cash,  # 初期資金
-            fees=0.0,  # 手数料設定（必要に応じて）
-            freq="D",  # 日足データ
+            **JP_MARKET_PARAMS,
         )
         return self.portfolio
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ghインストール
-sudo apt-get install gh
+sudo apt-get update && sudo apt-get install -y gh
 
 # pythonパッケージインストール
 if [ -f requirements.txt ]; then

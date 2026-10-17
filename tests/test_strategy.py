@@ -1,3 +1,5 @@
+import pytest
+
 from lib.backtester import Backtester
 from lib.strategies.exits import AtrStopLoss, AtrTakeProfit
 from lib.strategies.position_sizing import RiskPercentageSizer
@@ -39,8 +41,8 @@ def test_golden_cross_and_take_profit():
     trades = portfolio.trades.records
     assert len(trades) == 1, "取引が1回行われるはず"
 
-    # index 10 の終値でクロスが確定し、GoldenCrossSignal が shift(1) するため
-    # シグナルは index 11 に立ち、index 11 の始値でエントリーする
+    # クロス系シグナルは shift(1) されるため、シグナルの翌日にエントリーする
+    # index=10 の終値でクロス確定 -> index=11 の始値でエントリー
     assert trades.entry_idx[0] == 11
 
     # 利確されているか (ExitType 1 が Profit Stop)
@@ -110,3 +112,88 @@ def test_position_sizing():
     # 1020円の株を51万円分 -> 約500株
     # 日本株は100株単位設定にしているので、端数がどうなるか
     assert order["size"][0] >= 400  # およその株数チェック
+
+
+def _create_flat_df_with_golden_cross():
+    """
+    SL/TP の約定価格を検証するための、値動きのない DataFrame を作成する。
+
+    10日目(index=10)にゴールデンクロスが発生し、index=11 の始値 1000 でエントリーする。
+    ATR=20 なので、TP ラインは 1000 + 4ATR = 1080、SL ラインは 1000 - 2ATR = 960。
+    エントリー日の終値だけ 1020 にして、終値基準のライン(TP=1101.6 / SL=979.2)と
+    区別できるようにしている。
+    """
+    df = create_base_df(days=30)
+    df["Open"] = 1000.0
+    df["Close"] = 1000.0
+    df["High"] = 1010.0
+    df["Low"] = 990.0
+    df.loc[df.index[11], ["Close", "High"]] = [1020.0, 1020.0]
+
+    df.loc[df.index[0:10], "short_ma"] = 990
+    df.loc[df.index[10:], "short_ma"] = 1010
+    df.loc[:, "long_ma"] = 1000
+    return df
+
+
+def _run_atr_exit_backtest(df):
+    backtester = Backtester(
+        indicators=[],
+        entries=[GoldenCrossSignal()],
+        exits=[DeadCrossSignal()],
+        tp=AtrTakeProfit(4),
+        sl=AtrStopLoss(2),
+        position_sizer=RiskPercentageSizer(0.02),
+    )
+    return backtester.run(df).trades.records
+
+
+def test_take_profit_is_based_on_fill_price_and_hit_by_high():
+    """
+    TP ラインが約定価格(始値)基準で、高値が届いた日にライン価格で約定することをテスト
+    """
+    df = _create_flat_df_with_golden_cross()
+    # 終値は 1000 のまま、高値だけ TP ライン(1080)を超える
+    df.loc[df.index[15], "High"] = 1090.0
+
+    trades = _run_atr_exit_backtest(df)
+
+    assert len(trades) == 1
+    assert trades.entry_idx[0] == 11
+    assert trades.entry_price[0] == pytest.approx(1000.0)
+    assert trades.exit_idx[0] == 15
+    assert trades.exit_price[0] == pytest.approx(1080.0)
+
+
+def test_stop_loss_is_based_on_fill_price_and_hit_by_low():
+    """
+    SL ラインが約定価格(始値)基準で、安値が届いた日にライン価格で約定することをテスト
+    """
+    df = _create_flat_df_with_golden_cross()
+    # 終値は 1000 のまま、安値だけ SL ライン(960)を割る
+    df.loc[df.index[15], "Low"] = 950.0
+
+    trades = _run_atr_exit_backtest(df)
+
+    assert len(trades) == 1
+    assert trades.exit_idx[0] == 15
+    assert trades.exit_price[0] == pytest.approx(960.0)
+
+
+def test_take_profit_fills_at_open_when_gapped_over():
+    """
+    始値が TP ラインを飛び越えて寄り付いた場合、ライン価格ではなく始値で約定することをテスト
+    """
+    df = _create_flat_df_with_golden_cross()
+    df.loc[df.index[15], ["Open", "High", "Low", "Close"]] = [
+        1100.0,
+        1110.0,
+        1090.0,
+        1100.0,
+    ]
+
+    trades = _run_atr_exit_backtest(df)
+
+    assert len(trades) == 1
+    assert trades.exit_idx[0] == 15
+    assert trades.exit_price[0] == pytest.approx(1100.0)

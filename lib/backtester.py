@@ -17,6 +17,9 @@ JP_MARKET_PARAMS = {
     "direction": "longonly",
     "size_granularity": 100,  # 日本株固定ルール（100株単位）
     "min_size": 100,  # 100株未満は注文しない
+    # SL/TP ラインの基準を約定価格(始値)にする。
+    # 既定値はエントリー日の終値で、想定したラインからずれる
+    "stop_entry_price": "fillprice",
     "fees": 0.0,  # 手数料設定（暫定値。将来、手数料・スリッページを導入予定）
     "freq": "D",  # 日足データ
 }
@@ -32,6 +35,11 @@ class PreparedSignals:
     """
 
     close: pd.Series | pd.DataFrame
+    # SL/TP をザラ場の値動きで判定するために OHLC を渡す。
+    # 渡さないと終値だけで判定され、約定価格も終値になってしまう
+    open: pd.Series | pd.DataFrame
+    high: pd.Series | pd.DataFrame
+    low: pd.Series | pd.DataFrame
     price: pd.Series | pd.DataFrame  # 約定価格（翌日始値）
     entries: pd.Series | pd.DataFrame
     exits: pd.Series | pd.DataFrame
@@ -45,10 +53,13 @@ class PreparedSignals:
         from_signals のキーワード引数に変換します。
 
         Returns:
-            dict: close / price / entries / exits / sl_stop / tp_stop / size / size_type。
+            dict: close / open / high / low / price / entries / exits / sl_stop / tp_stop / size / size_type。
         """
         return {
             "close": self.close,
+            "open": self.open,
+            "high": self.high,
+            "low": self.low,
             "price": self.price,
             "entries": self.entries,
             "exits": self.exits,
@@ -164,6 +175,9 @@ class Backtester:
 
         return PreparedSignals(
             close=df["Close"],
+            open=df["Open"],
+            high=df["High"],
+            low=df["Low"],
             price=df["Open"],
             entries=entries,
             exits=exits,

@@ -292,16 +292,24 @@ class MultiBacktester:
 
         def _wide(attr: str) -> pd.DataFrame:
             return pd.concat(
-                {ticker: getattr(p, attr) for ticker, p in prepared.items()}, axis=1
+                {ticker: getattr(p, attr) for ticker, p in prepared.items()},
+                axis=1,
+                sort=True,
             ).sort_index()
 
         close = _wide("close")
         # データのある日（その銘柄が取引された日）
         has_data = close.notna()
 
+        # 時価評価用に、休場・欠損日は直前の終値で埋める（未来方向には埋めない）
+        filled_close = close.ffill()
+
         return PreparedSignals(
-            # 時価評価用に、休場・欠損日は直前の終値で埋める（未来方向には埋めない）
-            close=close.ffill(),
+            close=filled_close,
+            # 欠損日は値動きのない足（始値=高値=安値=直前の終値）として扱い、SL/TP が誤って発動しないようにする
+            open=_wide("open").where(has_data, filled_close),
+            high=_wide("high").where(has_data, filled_close),
+            low=_wide("low").where(has_data, filled_close),
             price=_wide("price"),
             entries=_wide("entries").fillna(False).astype(bool) & has_data,
             exits=_wide("exits").fillna(False).astype(bool) & has_data,

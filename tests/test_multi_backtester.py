@@ -143,11 +143,14 @@ def test_run_portfolio_shares_cash():
 
 def test_run_portfolio_no_orders_on_missing_days():
     """
-    上場前など、データのない日に注文が出ないことをテスト
+    上場前や欠損日など、データのない日に注文（SL/TP を含む）が出ないことをテスト
     """
     early = golden_cross_df(5, days=40, start_date="2024-01-01")
     # BBB は 20日遅れでデータが始まり、データ上の1日目のクロスで2日目にエントリーする
     late = golden_cross_df(1, days=20, start_date="2024-01-21")
+    # AAA の保有中に、AAA だけデータのない日を作る（BBB にはデータがある）
+    gap_day = early.index[25]
+    early = early.drop(gap_day)
 
     pf = MultiBacktester(build_manual_strategy).run_portfolio({"AAA": early, "BBB": late})
     orders = pf.orders.records_readable
@@ -155,6 +158,8 @@ def test_run_portfolio_no_orders_on_missing_days():
     for _, order in orders.iterrows():
         source = early if order["Column"] == "AAA" else late
         assert order["Timestamp"] in source.index
+
+    assert gap_day not in orders["Timestamp"].tolist()
 
     bbb = orders[orders["Column"] == "BBB"]
     assert len(bbb) == 1

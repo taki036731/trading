@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# ghインストール
+sudo apt-get update && sudo apt-get install -y gh
+
 # pythonパッケージインストール
 if [ -f requirements.txt ]; then
     sudo uv pip install --system -r requirements.txt

@@ -1,0 +1,41 @@
+name: Sync Issues to Google Drive for Gemini
+
+on:
+  issues: # Issue の作成・編集・クローズ・ラベル変更などで作動します
+  issue_comment: # コメントの追加・編集・削除で作動します
+  workflow_dispatch:
+
+# 連続で更新されたときは、最後の1回だけ実行します
+concurrency:
+  group: export-issues
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  export-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: リポジトリのチェックアウト
+        uses: actions/checkout@v4
+
+      - name: Issue の結合（Markdown化）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # OPEN / CLOSED の全 Issue をコメント付きで取得します（PR は含まれません）
+          gh issue list --repo "${{ github.repository }}" --state all --limit 1000 \
+            --json number,title,state,labels,author,createdAt,updatedAt,closedAt,url,body,comments \
+            > issues.json
+          jq -r \
+            --arg repo "${{ github.repository }}" \
+            --arg now "$(TZ=Asia/Tokyo date +'%Y-%m-%d %H:%M:%S')" \
+            -f .github/scripts/issues_to_md.jq issues.json > issues.md
+
+      - name: Google Driveへアップロード
+        uses: AnimMouse/setup-rclone@v1
+        with:
+          rclone_config: ${{ secrets.RCLONE_CONF }}
+      - run: rclone copy issues.md gdrive:${{ vars.GDRIVE_FOLDER_PATH }}

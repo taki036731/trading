@@ -4,6 +4,7 @@ import pytest
 
 from lib import data_loader as dl
 from lib.data_sources import AbstractPriceSource
+from lib.data_sources.yfinance_source import to_adjusted_with_raw
 
 
 def make_prices(start: str, periods: int, base: float = 1000.0) -> pd.DataFrame:
@@ -17,6 +18,7 @@ def make_prices(start: str, periods: int, base: float = 1000.0) -> pd.DataFrame:
             "Low": close - 2,
             "Close": close,
             "Volume": np.full(periods, 1000.0),
+            "RawOpen": close - 1,
         },
         index=index,
     )
@@ -155,3 +157,47 @@ def test_cache_is_separated_by_source(cache_dir):
 
     assert cache_path(cache_dir, "TEST").exists()
     assert not (cache_dir / "TEST.parquet").exists()
+
+
+def test_refetches_full_history_when_cache_lacks_required_columns(cache_dir):
+    """必須カラム（RawOpen など）のない古いキャッシュは、全期間を取り直して置き換える"""
+    full = make_prices("2024-01-01", 30)
+    write_cache(cache_dir, "TEST", full.iloc[:20].drop(columns=["RawOpen"]))
+    fake = FakeSource(full)
+
+    df = dl.fetch_stock_data("TEST", source=fake)
+
+    assert fake.calls == [None]
+    pd.testing.assert_frame_equal(df, full, check_freq=False)
+
+
+def test_to_adjusted_with_raw_restores_pre_split_price():
+    """
+    yfinance の未調整データ（分割調整のみ）から、調整後の OHLC と実際の始値を作る。
+    3日目に 1:5 分割があれば、それより前の実際の始値は yfinance の値の5倍になる
+    """
+    index = pd.bdate_range("2024-01-01", periods=5)
+    raw = pd.DataFrame(
+        {
+            "Open": [200.0, 202.0, 204.0, 206.0, 208.0],
+            "High": [210.0, 212.0, 214.0, 216.0, 218.0],
+            "Low": [190.0, 192.0, 194.0, 196.0, 198.0],
+            "Close": [205.0, 207.0, 209.0, 211.0, 213.0],
+            # 配当の調整で、過去ほど調整後終値が小さい
+            "Adj Close": [205.0 * 0.9, 207.0 * 0.9, 209.0 * 0.95, 211.0, 213.0],
+            "Volume": [1000.0] * 5,
+            "Dividends": [0.0] * 5,
+            "Stock Splits": [0.0, 0.0, 5.0, 0.0, 0.0],
+        },
+        index=index,
+    )
+
+    df = to_adjusted_with_raw(raw)
+
+    assert list(df.columns) == ["Open", "High", "Low", "Close", "Volume", "RawOpen"]
+    np.testing.assert_allclose(
+        df["RawOpen"].values, [1000.0, 1010.0, 204.0, 206.0, 208.0]
+    )
+    ratio = raw["Adj Close"] / raw["Close"]
+    np.testing.assert_allclose(df["Open"].values, (raw["Open"] * ratio).values)
+    np.testing.assert_allclose(df["Close"].values, raw["Adj Close"].values)

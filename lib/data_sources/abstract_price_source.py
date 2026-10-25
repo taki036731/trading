@@ -27,12 +27,13 @@ class AbstractPriceSource(ABC):
         """
         取得したデータに必須なカラム名のリストを返します。
 
-        Open / High / Low / Close は、株式分割・配当で調整した価格です。
+        Open / High / Low / Close は、株式分割・配当で調整した価格です（リターンの計算に使う）。
+        RawOpen は、調整していない当時の実際の始値です（100株単元の判定に使う）。
 
         Returns:
-            list[str]: ["Open", "High", "Low", "Close", "Volume"]
+            list[str]: ["Open", "High", "Low", "Close", "Volume", "RawOpen"]
         """
-        return ["Open", "High", "Low", "Close", "Volume"]
+        return ["Open", "High", "Low", "Close", "Volume", "RawOpen"]
 
     @abstractmethod
     def _fetch(self, ticker: str, start: str | None = None) -> pd.DataFrame:

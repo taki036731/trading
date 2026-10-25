@@ -3,7 +3,8 @@ import os
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
+
+from lib.data_sources import AbstractPriceSource, YFinanceSource
 
 CACHE_DIR = "data"
 
@@ -21,12 +22,13 @@ def fetch_stock_data(
     start: str | None = None,
     end: str | None = None,
     refresh: bool = False,
+    source: AbstractPriceSource | None = None,
 ) -> pd.DataFrame:
     """指定された銘柄のヒストリカルデータを取得し、Parquet形式でキャッシュ・更新を行う関数。
 
-    ローカルの `data` ディレクトリにParquetファイルが存在する場合はそれを読み込みます。
+    ローカルの `data/<取得元の名前>` ディレクトリにParquetファイルが存在する場合はそれを読み込みます。
     キャッシュが存在する場合でも、データ内の最新日付を確認し、不足している新しいデータがあれば
-    yfinanceから自動的に取得してキャッシュに追記（差分更新）します。
+    取得元から自動的に取得してキャッシュに追記（差分更新）します。
 
     調整後価格（auto_adjust=True）は、新しい株式分割・配当があると過去全体が遡って調整し直されます。
     そのため差分取得ではキャッシュの最終日の数日前から取り直し、重なった行の価格がキャッシュと
@@ -37,13 +39,19 @@ def fetch_stock_data(
         start (str, optional): データの取得開始日（'YYYY-MM-DD'）。デフォルトは None（全期間）。
         end (str, optional): データの取得終了日（'YYYY-MM-DD'）。デフォルトは None（最新まで）。
         refresh (bool, optional): True の場合、キャッシュを使わず全期間を取り直します。デフォルトは False。
+        source (AbstractPriceSource, optional): 株価データの取得元。デフォルトは None（YFinanceSource）。
 
     Returns:
         pd.DataFrame: 指定された期間の株価データを含むデータフレーム。
                       データの取得に失敗した場合や存在しない場合は空のデータフレームを返します。
     """
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    cache_path = os.path.join(CACHE_DIR, f"{ticker}.parquet")
+    if source is None:
+        source = YFinanceSource()
+
+    # 取得元ごとに価格の調整方法が違う可能性があるため、キャッシュは取得元ごとに分ける
+    cache_dir = os.path.join(CACHE_DIR, source.name)
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, f"{ticker}.parquet")
 
     # 1. データの用意（キャッシュの読み込みと差分更新、または全期間の新規取得）
     df = None
@@ -56,7 +64,7 @@ def fetch_stock_data(
         fetch_start = (last_date - pd.Timedelta(days=OVERLAP_DAYS)).strftime(
             "%Y-%m-%d"
         )
-        df_new = _history(ticker, fetch_start)
+        df_new = source.fetch(ticker, fetch_start)
 
         if df_new.empty:
             logger.info(
@@ -79,9 +87,9 @@ def fetch_stock_data(
             df.to_parquet(cache_path, engine="auto")
 
     if df is None:
-        logger.info(f"[{ticker}] yfinanceから全期間取得します。")
-        # キャッシュ構築のため、全期間 (period="max") を取得
-        df = _history(ticker)
+        logger.info(f"[{ticker}] {source.name} から全期間取得します。")
+        # キャッシュ構築のため、全期間を取得
+        df = source.fetch(ticker)
 
         if not df.empty:
             df.to_parquet(cache_path, engine="auto")
@@ -123,27 +131,3 @@ def _is_adjustment_changed(cached: pd.DataFrame, fetched: pd.DataFrame) -> bool:
     new = fetched.loc[common, PRICE_COLUMNS].to_numpy(dtype=float)
     return not np.allclose(old, new, rtol=PRICE_RTOL, atol=0.0, equal_nan=True)
 
-
-def _history(ticker: str, start: str | None = None) -> pd.DataFrame:
-    """yfinanceを使用してヒストリカルデータを取得する内部関数。
-    Args:
-        ticker (str): 取得する銘柄のティッカーシンボル。
-        start (str, optional): データの取得開始日（'YYYY-MM-DD'）。
-            指定がない場合は全期間（period="max"）を取得します。デフォルトは None。
-
-    Returns:
-        pd.DataFrame: 取得した株価データ（Open, High, Low, Close, Volume）。
-            タイムゾーン情報は削除されます。
-    """
-    ticker_obj = yf.Ticker(ticker)
-    if start is not None:
-        df = ticker_obj.history(start=start, auto_adjust=True)
-    else:
-        df = ticker_obj.history(period="max", auto_adjust=True)
-
-    # タイムゾーンを消去して日付操作を安定させる
-    if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
-        df.index = df.index.tz_localize(None)
-    df = df[["Open", "High", "Low", "Close", "Volume"]]
-
-    return df

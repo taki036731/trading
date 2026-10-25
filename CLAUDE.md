@@ -81,7 +81,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 - `run_independent(data)`: 銘柄 × パラメータの全組み合わせを独立した口座で実行し、1行1実行の指標の DataFrame を返す。CAGR・シャープレシオは、営業日の本数から求めた1年あたりの本数で年率換算する
 - `aggregate(summary)`: パラメータごとに銘柄横断の中央値・平均・プラス銘柄の割合を出す
 - `run_portfolio(data, params)`: 全銘柄を1つの口座(`cash_sharing=True`、`call_seq="auto"`)で運用する。`SizeType.Percent` のサイザーは**現金残高**に対する割合になる。同じ日に買いが重なり現金が足りない場合は、`data` の銘柄の並び順で先着
-- `load_universe(tickers, start, end)`: `fetch_stock_data` を銘柄ごとに呼んで `{ticker: df}` を返す
+- `load_universe(tickers, start, end, source=None)`: `fetch_stock_data` を銘柄ごとに呼んで `{ticker: df}` を返す
 
 ### 戦略コンポーネント(`lib/strategies/`)
 
@@ -95,7 +95,8 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 
 ### データ層
 
-- `lib/data_loader.py`: `fetch_stock_data(ticker, start, end)` が `yfinance` で取得し、`data/<ticker>.parquet` にキャッシュする。毎回全期間を取り直さず、キャッシュ済みの最終日以降だけを取得して、結合・重複排除する差分更新を行う
+- `lib/data_sources/`(`AbstractPriceSource`): 株価データの取得元。`name`(キャッシュのフォルダ名)と `_fetch()` を実装し、公開メソッドの `fetch()` が必須列(`Open/High/Low/Close/Volume`、価格は分割・配当の調整後)を検証する。取得元ごとに必要な価格の補正も、ここで行う。現在は `YFinanceSource`(`auto_adjust=True`)のみ。将来 J-Quants API などに差し替えられるようにしている
+- `lib/data_loader.py`: `fetch_stock_data(ticker, start, end, source=None)` が取得元(省略時は `YFinanceSource`)から取得し、`data/<取得元の名前>/<ticker>.parquet` にキャッシュする。毎回全期間を取り直さず、キャッシュ済みの最終日以降だけを取得して、結合・重複排除する差分更新を行う
 - `lib/data_saver.py`: `gspread` で DataFrame を Google Sheets に書き込む。環境変数 `SPREADSHEET_ID` / `CREDENTIALS_FILE`(`.env` から読み込み)で遅延初期化する。`Backtester.save_chart_to_sheet()` / `save_orders_to_sheet()` / `save_trades_to_sheet()` はこれに依存しており、スプレッドシートが未設定だと例外になる
 - `lib/__init__.py`: `setup_logging()` が `config/logging_config.json` を読み込む(`lib` と `tools` の名前空間のロガーを定義)。新しいエントリーポイントのスクリプトでは、ログ出力の前に1回呼ぶこと
 

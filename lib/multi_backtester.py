@@ -9,6 +9,7 @@ import vectorbt as vbt
 
 from lib import data_loader as dl
 from lib.backtester import JP_MARKET_PARAMS, Backtester, PreparedSignals
+from lib.data_sources import AbstractPriceSource
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,10 @@ METRIC_COLUMNS = [
 
 
 def load_universe(
-    tickers: Iterable[str], start: str | None = None, end: str | None = None
+    tickers: Iterable[str],
+    start: str | None = None,
+    end: str | None = None,
+    source: AbstractPriceSource | None = None,
 ) -> dict[str, pd.DataFrame]:
     """
     複数銘柄の株価データをまとめて取得します。
@@ -40,13 +44,14 @@ def load_universe(
         tickers (Iterable[str]): ティッカーシンボルのリスト（例: ['7203.T', '6758.T']）。
         start (str, optional): データの取得開始日（'YYYY-MM-DD'）。
         end (str, optional): データの取得終了日（'YYYY-MM-DD'）。
+        source (AbstractPriceSource, optional): 株価データの取得元。デフォルトは None（YFinanceSource）。
 
     Returns:
         dict[str, pd.DataFrame]: ティッカーをキー、株価データを値とする辞書（指定順を保持）。
     """
     data: dict[str, pd.DataFrame] = {}
     for ticker in tickers:
-        df = dl.fetch_stock_data(ticker, start=start, end=end)
+        df = dl.fetch_stock_data(ticker, start=start, end=end, source=source)
         if df.empty:
             logger.warning(f"[{ticker}] データが取得できなかったためスキップします。")
             continue

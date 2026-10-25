@@ -322,6 +322,8 @@ class MultiBacktester:
             tp_stop=_wide("tp_stop").fillna(0.0),
             size=_wide("size").where(has_data),
             size_type=next(iter(prepared.values())).size_type,
+            size_granularity=_wide("size_granularity").where(has_data),
+            min_size=_wide("min_size").where(has_data, 0.0),
         )
 
     def _param_names(self) -> list[str]:

@@ -59,6 +59,13 @@ def fetch_stock_data(
         logger.info(f"[{ticker}] キャッシュからデータを読み込みます。")
         df = pd.read_parquet(cache_path, engine="auto")
 
+    if df is not None and not set(source.required_columns) <= set(df.columns):
+        logger.warning(
+            f"[{ticker}] キャッシュに必須カラムが不足しています。全期間を取り直します。"
+        )
+        df = None
+
+    if df is not None:
         # キャッシュの最終日の数日前から取り直し、調整のずれを確認できるようにする
         last_date = df.index.max()
         fetch_start = (last_date - pd.Timedelta(days=OVERLAP_DAYS)).strftime(

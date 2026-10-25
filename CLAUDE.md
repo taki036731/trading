@@ -65,14 +65,14 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 1. 各 indicator の `.generate(df)` を呼ぶ。これらは `df` を直接変更し、`short_ma`、`long_ma`、`atr` などの列を追加する
 2. 損切り/利確のオブジェクトから `sl` / `tp` の割合を計算し、**1日シフトする**。T日のエントリーに使う損切り/利確の割合は前日終値が基準になるため、「翌日」の約定に合わせてずらしている
 3. 全てのエントリーシグナルを **AND** で結合し、全てのエグジットシグナルも **AND** で結合する(`_generate_signals`: `pd.concat(...).all(axis=1)`)。**OR ではない**ので注意
-4. `PositionSizer` でポジションサイズを計算する。このとき、シフト済みの `sl_pct` を渡す
+4. `PositionSizer` でポジションサイズを計算する。このとき、シフト済みの `sl_pct` を渡す。あわせて100株単元を調整後の株数に換算する(`_lot_size`: `100 × RawOpen / Open`。`RawOpen` がなければ100)。シミュレーションは調整後価格で行うので、分割・配当で価格が下方修正された過去ほど、実際の100株は調整後の株数では多くなるため
 5. `vbt.Portfolio.from_signals(...)` を呼ぶ。日本市場向けの制約がハードコードされている:
-   - `size_granularity=100`、`min_size=100`(100株単元)
+   - `size_granularity` / `min_size` は上記の単元で、**エントリーシグナルのある日だけ**かける。単元(調整後の株数)は配当落ち・分割のたびに変わるため、エグジットの日にもかけると全量を売れなくなる
    - `direction="longonly"`
    - `price=df["Open"]`(翌日始値で約定)
    - `fees=0.0`(**意図的な暫定値**。将来、手数料・スリッページを導入する予定)
 
-`run()` は `prepare(df)`(上記 1〜4 を行い、`PreparedSignals` を返す)と `from_signals` の呼び出しに分かれている。日本市場向けの固定条件は `JP_MARKET_PARAMS` にまとめてある。
+`run()` は `prepare(df)`(上記 1〜4 を行い、`PreparedSignals` を返す)と `from_signals` の呼び出しに分かれている。日本市場向けの固定条件は `JP_MARKET_PARAMS` にまとめてある(単元の制約は日ごとに変わるため `PreparedSignals` 側)。
 
 ### 複数銘柄・パラメータグリッド(`lib/multi_backtester.py`)
 
@@ -95,8 +95,8 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 
 ### データ層
 
-- `lib/data_sources/`(`AbstractPriceSource`): 株価データの取得元。`name`(キャッシュのフォルダ名)と `_fetch()` を実装し、公開メソッドの `fetch()` が必須列(`Open/High/Low/Close/Volume`、価格は分割・配当の調整後)を検証する。取得元ごとに必要な価格の補正も、ここで行う。現在は `YFinanceSource`(`auto_adjust=True`)のみ。将来 J-Quants API などに差し替えられるようにしている
-- `lib/data_loader.py`: `fetch_stock_data(ticker, start, end, source=None)` が取得元(省略時は `YFinanceSource`)から取得し、`data/<取得元の名前>/<ticker>.parquet` にキャッシュする。毎回全期間を取り直さず、キャッシュ済みの最終日以降だけを取得して、結合・重複排除する差分更新を行う
+- `lib/data_sources/`(`AbstractPriceSource`): 株価データの取得元。`name`(キャッシュのフォルダ名)と `_fetch()` を実装し、公開メソッドの `fetch()` が必須列(`Open/High/Low/Close/Volume` は分割・配当の調整後、`RawOpen` は当時の実際の始値)を検証する。取得元ごとに必要な価格の補正も、ここで行う(補正だけを別の部品にはしない)。現在は `YFinanceSource` のみで、`auto_adjust=True` と同じ調整後価格を作り、`RawOpen` は `Stock Splits` から分割比率を掛け戻して作る(yfinance の未調整の価格も分割調整済みのため)。将来 J-Quants API などに差し替えられるようにしている
+- `lib/data_loader.py`: `fetch_stock_data(ticker, start, end, source=None)` が取得元(省略時は `YFinanceSource`)から取得し、`data/<取得元の名前>/<ticker>.parquet` にキャッシュする(必須列のない古いキャッシュは全期間を取り直す)。毎回全期間を取り直さず、キャッシュ済みの最終日以降だけを取得して、結合・重複排除する差分更新を行う
 - `lib/data_saver.py`: `gspread` で DataFrame を Google Sheets に書き込む。環境変数 `SPREADSHEET_ID` / `CREDENTIALS_FILE`(`.env` から読み込み)で遅延初期化する。`Backtester.save_chart_to_sheet()` / `save_orders_to_sheet()` / `save_trades_to_sheet()` はこれに依存しており、スプレッドシートが未設定だと例外になる
 - `lib/__init__.py`: `setup_logging()` が `config/logging_config.json` を読み込む(`lib` と `tools` の名前空間のロガーを定義)。新しいエントリーポイントのスクリプトでは、ログ出力の前に1回呼ぶこと
 

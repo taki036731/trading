@@ -12,11 +12,13 @@ from lib.strategies.signals import AbstractSignal
 
 logger = logging.getLogger(__name__)
 
-# 日本株向けの約定ルール。単一銘柄・複数銘柄のどちらのバックテストでも同じ値を使う
+# 日本株の売買単位（100株単元）
+UNIT_SHARES = 100
+
+# 日本株向けの約定ルール。単一銘柄・複数銘柄のどちらのバックテストでも同じ値を使う。
+# 100株単元の制約（size_granularity / min_size）は、日ごとに値が変わるため PreparedSignals で渡す
 JP_MARKET_PARAMS = {
     "direction": "longonly",
-    "size_granularity": 100,  # 日本株固定ルール（100株単位）
-    "min_size": 100,  # 100株未満は注文しない
     # SL/TP ラインの基準を約定価格(始値)にする。
     # 既定値はエントリー日の終値で、想定したラインからずれる
     "stop_entry_price": "fillprice",
@@ -47,13 +49,17 @@ class PreparedSignals:
     tp_stop: pd.Series | pd.DataFrame  # シフト済みの利確幅（比率）
     size: pd.Series | pd.DataFrame
     size_type: int
+    # 100株単元を調整後の株数で表したもの。エントリーシグナルのある日だけ値を持つ
+    size_granularity: pd.Series | pd.DataFrame
+    min_size: pd.Series | pd.DataFrame
 
     def to_vbt_kwargs(self) -> dict:
         """
         from_signals のキーワード引数に変換します。
 
         Returns:
-            dict: close / open / high / low / price / entries / exits / sl_stop / tp_stop / size / size_type。
+            dict: close / open / high / low / price / entries / exits / sl_stop / tp_stop / size / size_type /
+                size_granularity / min_size。
         """
         return {
             "close": self.close,
@@ -67,6 +73,8 @@ class PreparedSignals:
             "tp_stop": self.tp_stop,
             "size": self.size,
             "size_type": self.size_type,
+            "size_granularity": self.size_granularity,
+            "min_size": self.min_size,
         }
 
 
@@ -137,7 +145,7 @@ class Backtester:
         1. インジケーターの計算
         2. 動的な利確・損切り幅の算出（翌日約定用に1日シフト）
         3. エントリー・エグジットのシグナル生成
-        4. ポジションサイズの決定
+        4. ポジションサイズと100株単元の決定
 
         複数銘柄を一括で検証する MultiBacktester からも、この処理を共通で使います。
 
@@ -173,6 +181,15 @@ class Backtester:
         # サイズ計算にもDay TのSL%を渡す(shift(1)した配列を渡す)
         size = self.position_sizer.generate(df, sl_pct=sl_pct)
 
+        # 100株単元の制約はエントリーの日だけにかける。
+        # 単元を調整後の株数で表すと配当落ち・分割のたびに値が変わるため、
+        # エグジットの日にもかけると、保有株数が単元で割り切れず全量を売れなくなる。
+        # （制約のない日の売りは全量になる。保有中にエントリーシグナルが出た日に
+        #   損切り・利確が発動し、かつ保有中に単元が変わっていた場合だけは、全量を売れないことがある）
+        lot = self._lot_size(df)
+        size_granularity = lot.where(entries)
+        min_size = lot.where(entries, 0.0)
+
         return PreparedSignals(
             close=df["Close"],
             open=df["Open"],
@@ -185,7 +202,30 @@ class Backtester:
             tp_stop=tp_pct,
             size=size,
             size_type=self.position_sizer.size_type,
+            size_granularity=size_granularity,
+            min_size=min_size,
         )
+
+    @staticmethod
+    def _lot_size(df: pd.DataFrame) -> pd.Series:
+        """
+        100株単元を、調整後価格で数えた株数に換算します。
+
+        シミュレーションは調整後価格で行うため、分割・配当で価格が下方修正された過去ほど、
+        実際の100株は調整後の株数では多くなります（例: 1:5 分割前の100株は、調整後の500株）。
+        lot × 調整後の始値 = 100 × 実際の始値 となり、1単元の金額が当時の実際の金額と一致します。
+        約定は始値で行うため、始値どうしの比で換算します。
+
+        Args:
+            df (pd.DataFrame): 株価データ。'RawOpen'（当時の実際の始値）があれば換算に使います。
+
+        Returns:
+            pd.Series: 各日の1単元の株数（調整後）。'RawOpen' がない場合や換算できない日は100。
+        """
+        if "RawOpen" not in df.columns:
+            return pd.Series(float(UNIT_SHARES), index=df.index)
+        lot = UNIT_SHARES * df["RawOpen"] / df["Open"]
+        return lot.where(lot > 0).fillna(float(UNIT_SHARES))
 
     def run(self, df: pd.DataFrame) -> vbt.Portfolio:
         """

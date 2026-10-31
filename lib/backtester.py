@@ -28,30 +28,30 @@ JP_MARKET_PARAMS = {
 
 
 @dataclass
-class PreparedSignals:
+class PreparedSignals[T: (pd.Series, pd.DataFrame)]:
     """
     vectorbt の from_signals に渡す入力一式。
 
-    単一銘柄では各属性が pd.Series、複数銘柄（資金共有モード）では
-    列=銘柄の pd.DataFrame になります。
+    単一銘柄では各属性が pd.Series（PreparedSignals[pd.Series]）、
+    複数銘柄（資金共有モード）では列=銘柄の pd.DataFrame（PreparedSignals[pd.DataFrame]）になります。
     """
 
-    close: pd.Series | pd.DataFrame
+    close: T
     # SL/TP をザラ場の値動きで判定するために OHLC を渡す。
     # 渡さないと終値だけで判定され、約定価格も終値になってしまう
-    open: pd.Series | pd.DataFrame
-    high: pd.Series | pd.DataFrame
-    low: pd.Series | pd.DataFrame
-    price: pd.Series | pd.DataFrame  # 約定価格（翌日始値）
-    entries: pd.Series | pd.DataFrame
-    exits: pd.Series | pd.DataFrame
-    sl_stop: pd.Series | pd.DataFrame  # シフト済みの損切り幅（比率）
-    tp_stop: pd.Series | pd.DataFrame  # シフト済みの利確幅（比率）
-    size: pd.Series | pd.DataFrame
+    open: T
+    high: T
+    low: T
+    price: T  # 約定価格（翌日始値）
+    entries: T
+    exits: T
+    sl_stop: T  # シフト済みの損切り幅（比率）
+    tp_stop: T  # シフト済みの利確幅（比率）
+    size: T
     size_type: int
     # 100株単元を調整後の株数で表したもの。エントリーシグナルのある日だけ値を持つ
-    size_granularity: pd.Series | pd.DataFrame
-    min_size: pd.Series | pd.DataFrame
+    size_granularity: T
+    min_size: T
 
     def to_vbt_kwargs(self) -> dict:
         """
@@ -138,7 +138,7 @@ class Backtester:
         results = [s.generate(df) for s in signals]
         return pd.concat(results, axis=1).all(axis=1)
 
-    def prepare(self, df: pd.DataFrame) -> PreparedSignals:
+    def prepare(self, df: pd.DataFrame) -> PreparedSignals[pd.Series]:
         """
         シミュレーションの直前までの処理を行い、vectorbt に渡す入力をまとめて返します。
 
@@ -153,7 +153,7 @@ class Backtester:
             df (pd.DataFrame): バックテストに使用する株価データ（インジケーターの列が追加されます）。
 
         Returns:
-            PreparedSignals: from_signals に渡す価格・シグナル・SL/TP・サイズ。
+            PreparedSignals[pd.Series]: from_signals に渡す価格・シグナル・SL/TP・サイズ。
         """
         # ---------------------------------------------------------
         # 1. インジケーターの計算 (ベクトル演算で一括処理)
@@ -227,6 +227,20 @@ class Backtester:
         lot = UNIT_SHARES * df["RawOpen"] / df["Open"]
         return lot.where(lot > 0).fillna(float(UNIT_SHARES))
 
+    @staticmethod
+    def _orders_readable(portfolio: vbt.Portfolio) -> pd.DataFrame:
+        """
+        注文履歴を、読みやすい形式の DataFrame で返します。
+
+        Args:
+            portfolio (vbt.Portfolio): バックテスト結果。
+
+        Returns:
+            pd.DataFrame: 注文履歴。
+        """
+        # vectorbt の cached_property を Pylance が関数と見なすため、このルールだけ無視する
+        return portfolio.orders.records_readable  # pyright: ignore[reportFunctionMemberAccess]
+
     def run(self, df: pd.DataFrame) -> vbt.Portfolio:
         """
         バックテストを実行します。
@@ -270,7 +284,7 @@ class Backtester:
         print("-" * 40)
         print("【最新の注文履歴】")
         # 最新5件を表示
-        print(self.portfolio.orders.records_readable.tail(5))  # type: ignore
+        print(self._orders_readable(self.portfolio).tail(5))
         print("-" * 40)
 
     def save_orders_to_csv(self, filename: str = "vectorbt_orders.csv"):
@@ -284,7 +298,7 @@ class Backtester:
             logger.warning("バックテストが実行されていません。")
             return
         # 取引履歴の詳細をCSVとして出力
-        self.portfolio.orders.records_readable.to_csv(filename)  # type: ignore
+        self._orders_readable(self.portfolio).to_csv(filename)
         logger.info(f"注文履歴を {filename} に保存しました。")
 
     def save_chart_to_sheet(self):
@@ -302,7 +316,7 @@ class Backtester:
             return
 
         # 1. 注文履歴を日付で集約
-        orders = self.portfolio.orders.records_readable.copy()  # type: ignore
+        orders = self._orders_readable(self.portfolio).copy()
         orders["Timestamp"] = pd.to_datetime(orders["Timestamp"])
 
         # 売買代金 (Value) を算出
@@ -353,7 +367,7 @@ class Backtester:
             logger.warning("バックテストが実行されていません。")
             return
 
-        df = self.portfolio.orders.records_readable  # type: ignore
+        df = self._orders_readable(self.portfolio)
         ds.write_df_to_sheet(sheet_name, df, include_index=False)
         logger.info(f"注文履歴を '{sheet_name}' シートに保存しました。")
 
@@ -365,7 +379,7 @@ class Backtester:
             logger.warning("バックテストが実行されていません。")
             return
 
-        df = self.portfolio.trades.records_readable  # type: ignore
+        df = self.portfolio.trades.records_readable  # pyright: ignore[reportFunctionMemberAccess]
         ds.write_df_to_sheet(sheet_name, df, include_index=False)
         logger.info(f"取引履歴を '{sheet_name}' シートに保存しました。")
 
@@ -379,4 +393,8 @@ class Backtester:
             )
             return
 
-        self.portfolio.plot().show()  # type: ignore
+        fig = self.portfolio.plot()
+        if fig is None:
+            logger.warning("表示できるチャートがありません。")
+            return
+        fig.show()

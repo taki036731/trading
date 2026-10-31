@@ -261,7 +261,7 @@ class MultiBacktester:
             raise ValueError("エラー: 銘柄データが空です。")
         params = params or {}
 
-        prepared: dict[str, PreparedSignals] = {}
+        prepared: dict[str, PreparedSignals[pd.Series]] = {}
         cash = init_cash
         for ticker, df in data.items():
             backtester = self.factory(**params)
@@ -284,15 +284,17 @@ class MultiBacktester:
         )
 
     @staticmethod
-    def _combine(prepared: dict[str, PreparedSignals]) -> PreparedSignals:
+    def _combine(
+        prepared: dict[str, PreparedSignals[pd.Series]],
+    ) -> PreparedSignals[pd.DataFrame]:
         """
         銘柄ごとの PreparedSignals を、列=銘柄の DataFrame にまとめます。
 
         Args:
-            prepared (dict[str, PreparedSignals]): ティッカーをキーとする各銘柄の入力。
+            prepared (dict[str, PreparedSignals[pd.Series]]): ティッカーをキーとする各銘柄の入力。
 
         Returns:
-            PreparedSignals: 各属性が列=銘柄の DataFrame になったもの。
+            PreparedSignals[pd.DataFrame]: 各属性が列=銘柄の DataFrame になったもの。
         """
 
         def _wide(attr: str) -> pd.DataFrame:

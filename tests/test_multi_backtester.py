@@ -1,8 +1,10 @@
+from dataclasses import fields
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from lib.backtester import Backtester
+from lib.backtester import Backtester, PreparedSignals
 from lib.multi_backtester import MultiBacktester, calc_metrics, expand_param_grid
 from lib.strategies.exits import AtrStopLoss, AtrTakeProfit
 from lib.strategies.indicators import ATRIndicator, MAIndicator
@@ -166,6 +168,19 @@ def test_run_portfolio_no_orders_on_missing_days():
     assert bbb["Timestamp"].iloc[0] == late.index[2]
     # BBB のデータがない期間も、口座の資産は NaN にならない
     assert not pf.value().isna().any()
+
+
+def test_combine_keys_match_prepared_signals():
+    """
+    PreparedSignals の属性、to_vbt_kwargs() のキー、_combine() のキーが一致することをテスト
+    （PreparedSignals に属性を足したとき、to_vbt_kwargs() や _combine() の更新漏れを検出する）
+    """
+    data = {"AAA": golden_cross_df(10), "BBB": golden_cross_df(10)}
+    prepared = {t: build_manual_strategy().prepare(df.copy()) for t, df in data.items()}
+
+    attrs = {f.name for f in fields(PreparedSignals)}
+    assert set(prepared["AAA"].to_vbt_kwargs()) == attrs
+    assert set(MultiBacktester._combine(prepared)) == attrs
 
 
 def test_run_portfolio_empty_data():

@@ -261,7 +261,7 @@ class MultiBacktester:
             raise ValueError("エラー: 銘柄データが空です。")
         params = params or {}
 
-        prepared: dict[str, PreparedSignals[pd.Series]] = {}
+        prepared: dict[str, PreparedSignals] = {}
         cash = init_cash
         for ticker, df in data.items():
             backtester = self.factory(**params)
@@ -275,7 +275,7 @@ class MultiBacktester:
 
         combined = self._combine(prepared)
         return vbt.Portfolio.from_signals(
-            **combined.to_vbt_kwargs(),
+            **combined,
             init_cash=cash,
             group_by=True,  # 全銘柄を1つの口座としてまとめる
             cash_sharing=True,  # 現金を銘柄間で共有する
@@ -284,17 +284,16 @@ class MultiBacktester:
         )
 
     @staticmethod
-    def _combine(
-        prepared: dict[str, PreparedSignals[pd.Series]],
-    ) -> PreparedSignals[pd.DataFrame]:
+    def _combine(prepared: dict[str, PreparedSignals]) -> dict:
         """
         銘柄ごとの PreparedSignals を、列=銘柄の DataFrame にまとめます。
 
         Args:
-            prepared (dict[str, PreparedSignals[pd.Series]]): ティッカーをキーとする各銘柄の入力。
+            prepared (dict[str, PreparedSignals]): ティッカーをキーとする各銘柄の入力。
 
         Returns:
-            PreparedSignals[pd.DataFrame]: 各属性が列=銘柄の DataFrame になったもの。
+            dict: from_signals のキーワード引数。キーは PreparedSignals.to_vbt_kwargs() と同じで、
+                size_type 以外の値は列=銘柄の DataFrame。
         """
 
         def _wide(attr: str) -> pd.DataFrame:
@@ -311,22 +310,22 @@ class MultiBacktester:
         # 時価評価用に、休場・欠損日は直前の終値で埋める（未来方向には埋めない）
         filled_close = close.ffill()
 
-        return PreparedSignals(
-            close=filled_close,
+        return {
+            "close": filled_close,
             # 欠損日は値動きのない足（始値=高値=安値=直前の終値）として扱い、SL/TP が誤って発動しないようにする
-            open=_wide("open").where(has_data, filled_close),
-            high=_wide("high").where(has_data, filled_close),
-            low=_wide("low").where(has_data, filled_close),
-            price=_wide("price"),
-            entries=_wide("entries").fillna(False).astype(bool) & has_data,
-            exits=_wide("exits").fillna(False).astype(bool) & has_data,
-            sl_stop=_wide("sl_stop").fillna(0.0),
-            tp_stop=_wide("tp_stop").fillna(0.0),
-            size=_wide("size").where(has_data),
-            size_type=next(iter(prepared.values())).size_type,
-            size_granularity=_wide("size_granularity").where(has_data),
-            min_size=_wide("min_size").where(has_data, 0.0),
-        )
+            "open": _wide("open").where(has_data, filled_close),
+            "high": _wide("high").where(has_data, filled_close),
+            "low": _wide("low").where(has_data, filled_close),
+            "price": _wide("price"),
+            "entries": _wide("entries").fillna(False).astype(bool) & has_data,
+            "exits": _wide("exits").fillna(False).astype(bool) & has_data,
+            "sl_stop": _wide("sl_stop").fillna(0.0),
+            "tp_stop": _wide("tp_stop").fillna(0.0),
+            "size": _wide("size").where(has_data),
+            "size_type": next(iter(prepared.values())).size_type,
+            "size_granularity": _wide("size_granularity").where(has_data),
+            "min_size": _wide("min_size").where(has_data, 0.0),
+        }
 
     def _param_names(self) -> list[str]:
         """

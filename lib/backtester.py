@@ -28,30 +28,30 @@ JP_MARKET_PARAMS = {
 
 
 @dataclass
-class PreparedSignals[T: (pd.Series, pd.DataFrame)]:
+class PreparedSignals:
     """
-    vectorbt の from_signals に渡す入力一式。
+    1銘柄分の、vectorbt の from_signals に渡す入力一式。
 
-    単一銘柄では各属性が pd.Series（PreparedSignals[pd.Series]）、
-    複数銘柄（資金共有モード）では列=銘柄の pd.DataFrame（PreparedSignals[pd.DataFrame]）になります。
+    複数銘柄（資金共有モード）では、MultiBacktester が銘柄ごとの PreparedSignals を
+    列=銘柄の DataFrame にまとめ、from_signals のキーワード引数として直接渡します。
     """
 
-    close: T
+    close: pd.Series
     # SL/TP をザラ場の値動きで判定するために OHLC を渡す。
     # 渡さないと終値だけで判定され、約定価格も終値になってしまう
-    open: T
-    high: T
-    low: T
-    price: T  # 約定価格（翌日始値）
-    entries: T
-    exits: T
-    sl_stop: T  # シフト済みの損切り幅（比率）
-    tp_stop: T  # シフト済みの利確幅（比率）
-    size: T
+    open: pd.Series
+    high: pd.Series
+    low: pd.Series
+    price: pd.Series  # 約定価格（翌日始値）
+    entries: pd.Series
+    exits: pd.Series
+    sl_stop: pd.Series  # シフト済みの損切り幅（比率）
+    tp_stop: pd.Series  # シフト済みの利確幅（比率）
+    size: pd.Series
     size_type: int
     # 100株単元を調整後の株数で表したもの。エントリーシグナルのある日だけ値を持つ
-    size_granularity: T
-    min_size: T
+    size_granularity: pd.Series
+    min_size: pd.Series
 
     def to_vbt_kwargs(self) -> dict:
         """
@@ -138,7 +138,7 @@ class Backtester:
         results = [s.generate(df) for s in signals]
         return pd.concat(results, axis=1).all(axis=1)
 
-    def prepare(self, df: pd.DataFrame) -> PreparedSignals[pd.Series]:
+    def prepare(self, df: pd.DataFrame) -> PreparedSignals:
         """
         シミュレーションの直前までの処理を行い、vectorbt に渡す入力をまとめて返します。
 
@@ -153,7 +153,7 @@ class Backtester:
             df (pd.DataFrame): バックテストに使用する株価データ（インジケーターの列が追加されます）。
 
         Returns:
-            PreparedSignals[pd.Series]: from_signals に渡す価格・シグナル・SL/TP・サイズ。
+            PreparedSignals: from_signals に渡す価格・シグナル・SL/TP・サイズ。
         """
         # ---------------------------------------------------------
         # 1. インジケーターの計算 (ベクトル演算で一括処理)

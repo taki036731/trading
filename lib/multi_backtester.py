@@ -1,11 +1,12 @@
 import itertools
 import logging
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 import vectorbt as vbt
+from vectorbt.portfolio.trades import Positions, Trades
 
 from lib import data_loader as dl
 from lib.backtester import JP_MARKET_PARAMS, Backtester, PreparedSignals
@@ -114,21 +115,24 @@ def calc_metrics(portfolio: vbt.Portfolio) -> dict[str, float]:
     Returns:
         dict[str, float]: METRIC_COLUMNS をキーとする指標の辞書。
     """
-    trades = portfolio.trades
+    # vectorbt の cached_property を Pylance が関数と見なすため、実際の型を明示する
+    trades = cast(Trades, portfolio.trades)
+    positions = cast(Positions, portfolio.positions)
     num_trades = int(trades.count())
     year_freq = _year_freq(portfolio.wrapper.index)
+    # annualized_return や trades.returns などは、vectorbt がクラスの定義時に追加する属性で、Pylance からは見えない
     return {
         "total_return": float(portfolio.total_return()),
-        "cagr": float(portfolio.annualized_return(year_freq=year_freq)),
-        "max_drawdown": float(portfolio.max_drawdown()),
-        "sharpe": float(portfolio.sharpe_ratio(year_freq=year_freq)),
-        "sortino": float(portfolio.sortino_ratio(year_freq=year_freq)),
+        "cagr": float(portfolio.annualized_return(year_freq=year_freq)),  # pyright: ignore[reportAttributeAccessIssue]
+        "max_drawdown": float(portfolio.max_drawdown()),  # pyright: ignore[reportAttributeAccessIssue]
+        "sharpe": float(portfolio.sharpe_ratio(year_freq=year_freq)),  # pyright: ignore[reportAttributeAccessIssue]
+        "sortino": float(portfolio.sortino_ratio(year_freq=year_freq)),  # pyright: ignore[reportAttributeAccessIssue]
         "num_trades": num_trades,
         "win_rate": float(trades.win_rate()) if num_trades else np.nan,
         "profit_factor": float(trades.profit_factor()) if num_trades else np.nan,
         "expectancy": float(trades.expectancy()) if num_trades else np.nan,
-        "avg_trade_return": float(trades.returns.mean()) if num_trades else np.nan,
-        "exposure": float(portfolio.positions.coverage()),
+        "avg_trade_return": float(trades.returns.mean()) if num_trades else np.nan,  # pyright: ignore[reportAttributeAccessIssue]
+        "exposure": float(positions.coverage()),
     }
 
 

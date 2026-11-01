@@ -1,3 +1,6 @@
+# vectorbt の portfolio.trades などを Pylance が関数と見なすため、このファイルではこのルールを無視する
+# pyright: reportFunctionMemberAccess=false
+
 import pytest
 
 from lib.backtester import Backtester

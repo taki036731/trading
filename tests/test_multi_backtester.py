@@ -1,3 +1,6 @@
+# vectorbt の portfolio.trades などを Pylance が関数と見なすため、このファイルではこのルールを無視する
+# pyright: reportFunctionMemberAccess=false
+
 from dataclasses import fields
 
 import numpy as np

@@ -81,4 +81,6 @@ if __name__ == "__main__":
     print("-" * 40)
     print("【資金共有モードの結果サマリ】")
     print(portfolio.stats())
-    portfolio.trades.records_readable.to_csv("multi_portfolio_trades.csv", index=False)
+    portfolio.trades.records_readable.to_csv(  # pyright: ignore[reportFunctionMemberAccess]
+        "multi_portfolio_trades.csv", index=False
+    )

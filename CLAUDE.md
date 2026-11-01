@@ -72,7 +72,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
    - `price=df["Open"]`(翌日始値で約定)
    - `fees=0.0`(**意図的な暫定値**。将来、手数料・スリッページを導入する予定)
 
-`run()` は `prepare(df)`(上記 1〜4 を行い、`PreparedSignals` を返す)と `from_signals` の呼び出しに分かれている。日本市場向けの固定条件は `JP_MARKET_PARAMS` にまとめてある(単元の制約は日ごとに変わるため `PreparedSignals` 側)。
+`run()` は `prepare(df)`(上記 1〜4 を行い、1銘柄分の入力を `PreparedSignals` で返す。属性は全て `pd.Series`)と `from_signals` の呼び出しに分かれている。日本市場向けの固定条件は `JP_MARKET_PARAMS` にまとめてある(単元の制約は日ごとに変わるため `PreparedSignals` 側)。
 
 ### 複数銘柄・パラメータグリッド(`lib/multi_backtester.py`)
 
@@ -80,7 +80,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 
 - `run_independent(data)`: 銘柄 × パラメータの全組み合わせを独立した口座で実行し、1行1実行の指標の DataFrame を返す。CAGR・シャープレシオは、営業日の本数から求めた1年あたりの本数で年率換算する
 - `aggregate(summary)`: パラメータごとに銘柄横断の中央値・平均・プラス銘柄の割合を出す
-- `run_portfolio(data, params)`: 全銘柄を1つの口座(`cash_sharing=True`、`call_seq="auto"`)で運用する。`SizeType.Percent` のサイザーは**現金残高**に対する割合になる。同じ日に買いが重なり現金が足りない場合は、`data` の銘柄の並び順で先着
+- `run_portfolio(data, params)`: 全銘柄を1つの口座(`cash_sharing=True`、`call_seq="auto"`)で運用する。銘柄ごとの `PreparedSignals` を `_combine()` で列=銘柄の DataFrame にまとめ、`from_signals` のキーワード引数(dict)として渡す(`PreparedSignals` には詰め直さない)。`SizeType.Percent` のサイザーは**現金残高**に対する割合になる。同じ日に買いが重なり現金が足りない場合は、`data` の銘柄の並び順で先着
 - `load_universe(tickers, start, end, source=None)`: `fetch_stock_data` を銘柄ごとに呼んで `{ticker: df}` を返す
 
 ### 戦略コンポーネント(`lib/strategies/`)

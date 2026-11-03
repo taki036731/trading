@@ -3,7 +3,7 @@
 
 import pytest
 
-from lib.backtester import Backtester
+from lib.backtester import DEFAULT_SLIPPAGE, Backtester
 from lib.strategies.exits import AtrStopLoss, AtrTakeProfit
 from lib.strategies.position_sizing import RiskPercentageSizer
 from lib.strategies.signals import (
@@ -139,7 +139,9 @@ def _create_flat_df_with_golden_cross():
     return df
 
 
-def _run_atr_exit_backtest(df):
+def _run_atr_exit_backtest(df, **costs):
+    # ラインの計算を検証しやすいように、指定がなければ取引コストなしで実行する
+    costs = {"fees": 0.0, "slippage": 0.0, **costs}
     backtester = Backtester(
         indicators=[],
         entries=[GoldenCrossSignal()],
@@ -147,6 +149,7 @@ def _run_atr_exit_backtest(df):
         tp=AtrTakeProfit(4),
         sl=AtrStopLoss(2),
         position_sizer=RiskPercentageSizer(0.02),
+        **costs,
     )
     return backtester.run(df).trades.records
 
@@ -200,3 +203,99 @@ def test_take_profit_fills_at_open_when_gapped_over():
     assert len(trades) == 1
     assert trades.exit_idx[0] == 15
     assert trades.exit_price[0] == pytest.approx(1100.0)
+
+
+def test_default_slippage_is_applied():
+    """
+    引数を省略した場合、既定のスリッページで約定することをテスト
+    """
+    df = _create_flat_df_with_golden_cross()
+    backtester = Backtester(
+        indicators=[],
+        entries=[GoldenCrossSignal()],
+        exits=[DeadCrossSignal()],
+        tp=AtrTakeProfit(4),
+        sl=AtrStopLoss(2),
+        position_sizer=RiskPercentageSizer(0.02),
+    )
+    trades = backtester.run(df).trades.records
+
+    assert DEFAULT_SLIPPAGE > 0
+    assert trades.entry_price[0] == pytest.approx(1000.0 * (1 + DEFAULT_SLIPPAGE))
+
+
+def test_slippage_on_signal_exit():
+    """
+    シグナルでの売買が、買いは高く、売りは安く約定することをテスト
+    """
+    df = _create_flat_df_with_golden_cross()
+    # index=15 の終値でデッドクロス確定 -> index=16 の始値でエグジット
+    df.loc[df.index[15:], "short_ma"] = 990
+
+    trades = _run_atr_exit_backtest(df, slippage=0.001)
+
+    assert len(trades) == 1
+    assert trades.entry_price[0] == pytest.approx(1001.0)
+    assert trades.exit_idx[0] == 16
+    assert trades.exit_price[0] == pytest.approx(999.0)
+
+
+def test_slippage_on_take_profit():
+    """
+    TP の決済にもスリッページがかかることをテスト（stop_exit_price の既定値では0になる）
+    """
+    df = _create_flat_df_with_golden_cross()
+    df.loc[df.index[15], "High"] = 1090.0
+
+    trades = _run_atr_exit_backtest(df, slippage=0.001)
+
+    # ラインはスリッページ込みの約定価格が基準: 1001 * 1.08 = 1081.08
+    assert trades.exit_idx[0] == 15
+    assert trades.exit_price[0] == pytest.approx(1001.0 * 1.08 * 0.999)
+
+
+def test_slippage_on_stop_loss():
+    """
+    SL の決済にもスリッページがかかることをテスト（stop_exit_price の既定値では0になる）
+    """
+    df = _create_flat_df_with_golden_cross()
+    df.loc[df.index[15], "Low"] = 950.0
+
+    trades = _run_atr_exit_backtest(df, slippage=0.001)
+
+    # ラインはスリッページ込みの約定価格が基準: 1001 * 0.96 = 960.96
+    assert trades.exit_idx[0] == 15
+    assert trades.exit_price[0] == pytest.approx(1001.0 * 0.96 * 0.999)
+
+
+def test_slippage_on_stop_loss_gapped_down():
+    """
+    始値が SL ラインを割って寄り付いた場合、始値を基準にスリッページがかかることをテスト
+    """
+    df = _create_flat_df_with_golden_cross()
+    df.loc[df.index[15], ["Open", "High", "Low", "Close"]] = [
+        900.0,
+        910.0,
+        890.0,
+        900.0,
+    ]
+
+    trades = _run_atr_exit_backtest(df, slippage=0.001)
+
+    assert trades.exit_idx[0] == 15
+    assert trades.exit_price[0] == pytest.approx(900.0 * 0.999)
+
+
+def test_fees_are_charged_on_both_sides():
+    """
+    手数料が、買いと売りの両方の売買代金にかかることをテスト
+    """
+    df = _create_flat_df_with_golden_cross()
+    df.loc[df.index[15], "High"] = 1090.0
+
+    trades = _run_atr_exit_backtest(df, fees=0.001)
+
+    size = trades["size"][0]
+    assert size > 0
+    assert trades.entry_fees[0] == pytest.approx(size * 1000.0 * 0.001)
+    assert trades.exit_fees[0] == pytest.approx(size * 1080.0 * 0.001)

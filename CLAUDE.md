@@ -54,7 +54,7 @@ python -m tools.strategy01
 ## バックテストの正しさに関するルール(最重要)
 
 - ルックアヘッドバイアス(未来の情報の混入)を入れない。シグナルや SL/TP の `shift(1)` の扱いを変更・削除するときは、理由を説明して確認を取る
-- 売買結果に影響する設定(`fees`、`size_granularity`、`min_size`、約定価格など)を変えるときは、変更前後の結果の差も報告する
+- 売買結果に影響する設定(`fees`、`slippage`、`stop_exit_price`、`size_granularity`、`min_size`、約定価格など)を変えるときは、変更前後の結果の差も報告する
 - 結果が良くなる変更ほど疑う。過学習や未来情報の混入がないか確認する
 
 ## アーキテクチャ
@@ -75,9 +75,10 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
    - `size_granularity` / `min_size` は上記の単元で、**エントリーシグナルのある日だけ**かける。単元(調整後の株数)は配当落ち・分割のたびに変わるため、エグジットの日にもかけると全量を売れなくなる
    - `direction="longonly"`
    - `price=df["Open"]`(翌日始値で約定)
-   - `fees=0.0`(**意図的な暫定値**。将来、手数料・スリッページを導入する予定)
+   - `stop_exit_price="stopmarket"`(SL/TP の決済にもスリッページをかける。既定値の `stoplimit` では0になる)
+   - `fees` / `slippage` は `Backtester` の引数で差し替えられる(片道の割合。既定値は `DEFAULT_FEES=0.0`、`DEFAULT_SLIPPAGE=0.001`)。`run_portfolio` でも factory が作る `Backtester` の値を使う
 
-`run()` は `prepare(df)`(上記 1〜4 を行い、1銘柄分の入力を `PreparedSignals` で返す。属性は全て `pd.Series`)と `from_signals` の呼び出しに分かれている。日本市場向けの固定条件は `JP_MARKET_PARAMS` にまとめてある(単元の制約は日ごとに変わるため `PreparedSignals` 側)。
+`run()` は `prepare(df)`(上記 1〜4 を行い、1銘柄分の入力を `PreparedSignals` で返す。属性は全て `pd.Series`)と `from_signals` の呼び出しに分かれている。日本市場向けの固定条件は `JP_MARKET_PARAMS` にまとめてある(単元の制約は日ごとに変わるため `PreparedSignals` 側、取引コストは差し替えられるように `Backtester.cost_params` 側)。
 
 ### 複数銘柄・パラメータグリッド(`lib/multi_backtester.py`)
 

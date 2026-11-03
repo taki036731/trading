@@ -247,6 +247,7 @@ class MultiBacktester:
           その時点の「現金残高」に対する割合になります
         - 日付は全銘柄の和集合にそろえます。データのない日はエントリー/エグジットを False、
           サイズを NaN にして注文を出しません。終値は時価評価のため前方埋めします（過去方向のみ）
+        - 手数料・スリッページは、factory が作る Backtester の値を使います
 
         Args:
             data (dict[str, pd.DataFrame]): ティッカーをキー、株価データを値とする辞書。
@@ -267,10 +268,12 @@ class MultiBacktester:
 
         prepared: dict[str, PreparedSignals] = {}
         cash = init_cash
+        cost_params: dict[str, Any] = {}
         for ticker, df in data.items():
             backtester = self.factory(**params)
             if cash is None:
                 cash = backtester.init_cash
+            cost_params = backtester.cost_params
             prepared[ticker] = backtester.prepare(df.copy())
 
         size_types = {p.size_type for p in prepared.values()}
@@ -284,6 +287,7 @@ class MultiBacktester:
             group_by=True,  # 全銘柄を1つの口座としてまとめる
             cash_sharing=True,  # 現金を銘柄間で共有する
             call_seq="auto",  # 同じ日は売り → 買いの順に処理する
+            **cost_params,
             **JP_MARKET_PARAMS,
         )
 

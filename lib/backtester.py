@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
 import vectorbt as vbt
@@ -15,14 +16,23 @@ logger = logging.getLogger(__name__)
 # 日本株の売買単位（100株単元）
 UNIT_SHARES = 100
 
+# 売買代金に対する手数料の割合（片道）。国内株は手数料無料のネット証券が多いため0とする
+DEFAULT_FEES = 0.0
+# 約定価格に対するスリッページの割合（片道）
+DEFAULT_SLIPPAGE = 0.001
+
 # 日本株向けの約定ルール。単一銘柄・複数銘柄のどちらのバックテストでも同じ値を使う。
 # 100株単元の制約（size_granularity / min_size）は、日ごとに値が変わるため PreparedSignals で渡す
-JP_MARKET_PARAMS = {
+# 手数料・スリッページは差し替えられるように Backtester の引数で渡す
+JP_MARKET_PARAMS: dict[str, Any] = {
     "direction": "longonly",
     # SL/TP ラインの基準を約定価格(始値)にする。
     # 既定値はエントリー日の終値で、想定したラインからずれる
     "stop_entry_price": "fillprice",
-    "fees": 0.0,  # 手数料設定（暫定値。将来、手数料・スリッページを導入予定）
+    # SL/TP の決済にもスリッページをかける。
+    # 既定値の stoplimit ではスリッページが0になり、成績が楽観的に出る。
+    # SL と TP を分けて指定できないため、実際には指値で出せる TP にもかかる（保守的な側に倒す）
+    "stop_exit_price": "stopmarket",
     "freq": "D",  # 日足データ
 }
 
@@ -95,6 +105,8 @@ class Backtester:
         sl: AbstractStopLoss,
         position_sizer: AbstractPositionSizer,
         init_cash: float = 1000000.0,
+        fees: float = DEFAULT_FEES,
+        slippage: float = DEFAULT_SLIPPAGE,
     ):
         """
         Backtester を初期化します。
@@ -107,6 +119,8 @@ class Backtester:
             sl (AbstractStopLoss): 損切りロジックの実装。
             position_sizer (AbstractPositionSizer): ポジションサイズ決定ロジック。
             init_cash (float): 初期資金。デフォルトは 1,000,000.0。
+            fees (float): 売買代金に対する手数料の割合（片道）。デフォルトは DEFAULT_FEES。
+            slippage (float): 約定価格に対するスリッページの割合（片道）。デフォルトは DEFAULT_SLIPPAGE。
         """
         self.indicators = indicators
         self.entries = entries
@@ -115,10 +129,22 @@ class Backtester:
         self.sl = sl
         self.position_sizer = position_sizer
         self.init_cash = init_cash
+        self.fees = fees
+        self.slippage = slippage
         self.portfolio: vbt.Portfolio | None = None
         self.df: pd.DataFrame | None = None
         self.entries_series: pd.Series | None = None
         self.exits_series: pd.Series | None = None
+
+    @property
+    def cost_params(self) -> dict[str, Any]:
+        """
+        取引コストを、from_signals のキーワード引数で返します。
+
+        Returns:
+            dict[str, Any]: fees / slippage。
+        """
+        return {"fees": self.fees, "slippage": self.slippage}
 
     def _generate_signals(
         self, df: pd.DataFrame, signals: list[AbstractSignal]
@@ -263,6 +289,7 @@ class Backtester:
         self.portfolio = vbt.Portfolio.from_signals(
             **prepared.to_vbt_kwargs(),
             init_cash=self.init_cash,  # 初期資金
+            **self.cost_params,
             **JP_MARKET_PARAMS,
         )
         return self.portfolio

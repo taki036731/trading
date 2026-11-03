@@ -186,6 +186,43 @@ def test_combine_keys_match_prepared_signals():
     assert set(MultiBacktester._combine(prepared)) == attrs
 
 
+def test_run_portfolio_uses_costs_from_factory():
+    """
+    資金共有モードでも、factory が作る Backtester の手数料・スリッページを使うことをテスト
+    """
+
+    def factory() -> Backtester:
+        backtester = build_manual_strategy()
+        backtester.fees = 0.001
+        backtester.slippage = 0.01
+        return backtester
+
+    df = golden_cross_df(10)
+    pf = MultiBacktester(factory).run_portfolio({"AAA": df})
+
+    order = pf.orders.records_readable.iloc[0]
+    assert order["Price"] == pytest.approx(df["Open"].iloc[11] * 1.01)
+    assert order["Fees"] == pytest.approx(order["Size"] * order["Price"] * 0.001)
+
+
+def test_slippage_can_be_used_as_grid_parameter():
+    """
+    factory の引数にすれば、param_grid でスリッページの感度を比較できることをテスト
+    """
+
+    def factory(slippage: float) -> Backtester:
+        backtester = build_strategy()
+        backtester.slippage = slippage
+        return backtester
+
+    data = {"AAA": create_random_walk_df(seed=1), "BBB": create_random_walk_df(seed=2)}
+    summary = MultiBacktester(factory, {"slippage": [0.0, 0.01]}).run_independent(data)
+
+    returns = summary.groupby("slippage")["total_return"].sum()
+    assert summary["num_trades"].sum() > 0, "取引が発生するデータでテストする"
+    assert returns[0.01] < returns[0.0]
+
+
 def test_run_portfolio_empty_data():
     with pytest.raises(ValueError):
         MultiBacktester(build_strategy).run_portfolio({})

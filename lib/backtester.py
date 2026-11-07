@@ -1,7 +1,8 @@
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
+import numpy as np
 import pandas as pd
 import vectorbt as vbt
 
@@ -35,6 +36,9 @@ JP_MARKET_PARAMS: dict[str, Any] = {
     "stop_exit_price": "stopmarket",
     "freq": "D",  # 日足データ
 }
+
+# エントリー当日を2行に分けるときの、2行目（始値より後の値動き）の時刻
+SPLIT_BAR_OFFSET = pd.Timedelta(hours=12)
 
 
 @dataclass
@@ -86,6 +90,64 @@ class PreparedSignals:
             "size_granularity": self.size_granularity,
             "min_size": self.min_size,
         }
+
+    def split_entry_day_bars(self, slippage: float) -> "PreparedSignals":
+        """
+        エントリー当日に SL/TP ラインへ届く日の足を、2行に分けたものを返します。
+
+        vectorbt はエントリーした足では SL/TP を判定しないため、始値で買った当日に
+        ラインへ届いても手仕舞われません。該当日を次の2行に分け、2行目で判定させます。
+
+        - 1行目（元の日時）: 始値だけの足（O=H=L=C=始値）。ここで約定する
+        - 2行目（元の日時 + SPLIT_BAR_OFFSET）: 始値より後の値動き（始値と実際の H/L/C）。シグナルは出さない
+
+        シフト済みのシグナル・SL/TP 幅・サイズは、元の日時の行にそのまま残します（行をずらさない）。
+        そのため、分割は必ず prepare() の後に行います。
+        同じ日に SL と TP の両方に届いた場合は、vectorbt の判定順で SL が優先されます。
+
+        Args:
+            slippage (float): 約定価格に対するスリッページの割合。SL/TP ラインは
+                スリッページ込みの約定価格が基準になるため、判定にも使います。
+
+        Returns:
+            PreparedSignals: 該当日を分割した入力。該当日がなければ self をそのまま返します。
+        """
+        # ラインの基準は約定価格（stop_entry_price="fillprice"）。始値基準だと、ラインの近くで分割が漏れる
+        fill = self.open * (1 + slippage)
+        touched = self.entries & (
+            ((self.sl_stop > 0) & (self.low <= fill * (1 - self.sl_stop)))
+            | ((self.tp_stop > 0) & (self.high >= fill * (1 + self.tp_stop)))
+        )
+        if not touched.any():
+            return self
+
+        days = cast(pd.DatetimeIndex, self.open.index)[touched.to_numpy()]
+        # 元のインデックスと日時の単位（ms など）をそろえる
+        rest_index = (days + SPLIT_BAR_OFFSET).as_unit(days.unit)
+
+        def _split(first: pd.Series, rest: pd.Series) -> pd.Series:
+            """元の行（first）に、該当日の2行目（rest の値）を差し込みます。"""
+            return pd.concat([first, rest[touched].set_axis(rest_index)]).sort_index()
+
+        index = self.open.index
+        no_signal = pd.Series(False, index=index)
+        flat = touched.to_numpy()  # 1行目を始値だけの足にする日
+
+        return PreparedSignals(
+            close=_split(self.close.mask(flat, self.open), self.close),
+            open=_split(self.open, self.open),
+            high=_split(self.high.mask(flat, self.open), self.high),
+            low=_split(self.low.mask(flat, self.open), self.low),
+            price=_split(self.price, self.open),
+            entries=_split(self.entries, no_signal),
+            exits=_split(self.exits, no_signal),
+            sl_stop=_split(self.sl_stop, self.sl_stop),
+            tp_stop=_split(self.tp_stop, self.tp_stop),
+            size=_split(self.size, pd.Series(np.nan, index=index)),
+            size_type=self.size_type,
+            size_granularity=_split(self.size_granularity, pd.Series(np.nan, index=index)),
+            min_size=_split(self.min_size, pd.Series(0.0, index=index)),
+        )
 
 
 class Backtester:
@@ -272,6 +334,8 @@ class Backtester:
         バックテストを実行します。
 
         prepare() で作った入力を vectorbt に渡してシミュレーションします。
+        エントリー当日に SL/TP ラインへ届く日は、足を2行に分けてから渡します（split_entry_day_bars）。
+        そのため、Portfolio のインデックスには、元の日付に加えて該当日の 12:00 の行が入ります。
 
         Args:
             df (pd.DataFrame): バックテストに使用する株価データ。
@@ -286,8 +350,9 @@ class Backtester:
         self.entries_series = prepared.entries
         self.exits_series = prepared.exits
 
+        # 状態として保持するシグナルは日次のまま。分割はシミュレーションの入力にだけかける
         self.portfolio = vbt.Portfolio.from_signals(
-            **prepared.to_vbt_kwargs(),
+            **prepared.split_entry_day_bars(self.slippage).to_vbt_kwargs(),
             init_cash=self.init_cash,  # 初期資金
             **self.cost_params,
             **JP_MARKET_PARAMS,
@@ -344,7 +409,8 @@ class Backtester:
 
         # 1. 注文履歴を日付で集約
         orders = self._orders_readable(self.portfolio).copy()
-        orders["Timestamp"] = pd.to_datetime(orders["Timestamp"])
+        # エントリー当日に足を分けた日は、SL/TP の決済が 12:00 になるため、日付にそろえて集計する
+        orders["Timestamp"] = pd.to_datetime(orders["Timestamp"]).dt.normalize()
 
         # 売買代金 (Value) を算出
         orders["Value"] = orders["Size"] * orders["Price"]

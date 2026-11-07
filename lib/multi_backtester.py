@@ -101,7 +101,9 @@ def _year_freq(index: pd.Index) -> str | None:
     years = (index[-1] - index[0]).days / 365.25
     if years <= 0:
         return None
-    # freq="D" では1本=1日として扱われるため、「本数/年」日を1年とみなす
+    # freq="D" では1本=1日として扱われるため、「本数/年」日を1年とみなす。
+    # エントリー当日に足を分けた行も本数に含める。vectorbt は行数で年率換算するため、
+    # 含めておけば CAGR は暦日の長さどおりになる
     return f"{len(index) / years} days"
 
 
@@ -248,6 +250,8 @@ class MultiBacktester:
         - 日付は全銘柄の和集合にそろえます。データのない日はエントリー/エグジットを False、
           サイズを NaN にして注文を出しません。終値は時価評価のため前方埋めします（過去方向のみ）
         - 手数料・スリッページは、factory が作る Backtester の値を使います
+        - エントリー当日に SL/TP ラインへ届く日は、銘柄ごとに足を2行に分けます（split_entry_day_bars）。
+          他の銘柄の2行目は、値動きのない足（データのない日と同じ扱い）になります
 
         Args:
             data (dict[str, pd.DataFrame]): ティッカーをキー、株価データを値とする辞書。
@@ -274,7 +278,10 @@ class MultiBacktester:
             if cash is None:
                 cash = backtester.init_cash
             cost_params = backtester.cost_params
-            prepared[ticker] = backtester.prepare(df.copy())
+            # エントリー当日の SL/TP 判定のための足の分割は、Backtester.run と同じく prepare の後に行う
+            prepared[ticker] = backtester.prepare(df.copy()).split_entry_day_bars(
+                backtester.slippage
+            )
 
         size_types = {p.size_type for p in prepared.values()}
         if len(size_types) != 1:

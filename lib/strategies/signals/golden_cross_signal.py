@@ -35,11 +35,6 @@ class GoldenCrossSignal(AbstractSignal):
         Returns:
             pd.Series: ゴールデンクロスが発生した時点でTrueとなるブール値Series。
         """
-        return (
-            (
-                (df["short_ma"] > df["long_ma"])
-                & (df["short_ma"].shift(1) <= df["long_ma"].shift(1))
-            )
-            .shift(1)
-            .fillna(False)
+        return (df["short_ma"] > df["long_ma"]) & (
+            df["short_ma"].shift(1) <= df["long_ma"].shift(1)
         )

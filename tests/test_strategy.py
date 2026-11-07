@@ -52,7 +52,7 @@ def test_golden_cross_and_take_profit():
     trades = portfolio.trades.records
     assert len(trades) == 1, "取引が1回行われるはず"
 
-    # クロス系シグナルは shift(1) されるため、シグナルの翌日にエントリーする
+    # シグナルは generate() で shift(1) されるため、クロスの翌日にエントリーする
     # index=10 の終値でクロス確定 -> index=11 の始値でエントリー
     assert trades.entry_idx[0] == 11
 
@@ -451,7 +451,7 @@ def test_split_keeps_shifted_inputs_on_original_rows():
     split = prepared.split_entry_day_bars(backtester.slippage)
 
     original_index = prepared.open.index
-    rest_index = split.open.index.difference(original_index)
+    rest_index = pd.DatetimeIndex(split.open.index.difference(original_index))
     assert len(rest_index) > 0, "足を分ける日が出るデータでテストする"
     assert split.open.index.dtype == original_index.dtype
 

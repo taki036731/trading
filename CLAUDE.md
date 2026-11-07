@@ -85,7 +85,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 
 `MultiBacktester(factory, param_grid)` は、パラメータを受け取って新しい `Backtester` を返す関数(factory)を使って、複数銘柄を一括で検証する。
 
-- `run_independent(data)`: 銘柄 × パラメータの全組み合わせを独立した口座で実行し、1行1実行の指標の DataFrame を返す。CAGR・シャープレシオは、営業日の本数から求めた1年あたりの本数で年率換算する
+- `run_independent(data)`: 銘柄 × パラメータの全組み合わせを独立した口座で実行し、1行1実行の指標(`lib/metrics.py` の `calc_metrics`)の DataFrame を返す
 - `aggregate(summary)`: パラメータごとに銘柄横断の中央値・平均・プラス銘柄の割合を出す
 - `run_portfolio(data, params)`: 全銘柄を1つの口座(`cash_sharing=True`、`call_seq="auto"`)で運用する。銘柄ごとの `PreparedSignals` を(足を分割してから)`_combine()` で列=銘柄の DataFrame にまとめ、`from_signals` のキーワード引数(dict)として渡す(`PreparedSignals` には詰め直さない)。`SizeType.Percent` のサイザーは**現金残高**に対する割合になる。同じ日に買いが重なり現金が足りない場合は、`data` の銘柄の並び順で先着
 - `load_universe(tickers, start, end, source=None)`: `fetch_stock_data` を銘柄ごとに呼んで `{ticker: df}` を返す
@@ -105,6 +105,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 - `lib/data_sources/`(`AbstractPriceSource`): 株価データの取得元。`name`(キャッシュのフォルダ名)と `_fetch()` を実装し、公開メソッドの `fetch()` が必須列(`Open/High/Low/Close/Volume` は分割・配当の調整後、`RawOpen` は当時の実際の始値)を検証する。取得元ごとに必要な価格の補正も、ここで行う(補正だけを別の部品にはしない)。現在は `YFinanceSource` のみで、`auto_adjust=True` と同じ調整後価格を作り、`RawOpen` は `Stock Splits` から分割比率を掛け戻して作る(yfinance の未調整の価格も分割調整済みのため)。将来 J-Quants API などに差し替えられるようにしている
 - `lib/data_loader.py`: `fetch_stock_data(ticker, start, end, source=None)` が取得元(省略時は `YFinanceSource`)から取得し、`data/<取得元の名前>/<ticker>.parquet` にキャッシュする(必須列のない古いキャッシュは全期間を取り直す)。毎回全期間を取り直さず、キャッシュ済みの最終日以降だけを取得して、結合・重複排除する差分更新を行う
 - `lib/data_saver.py`: `gspread` で DataFrame を Google Sheets に書き込む。環境変数 `SPREADSHEET_ID` / `CREDENTIALS_FILE`(`.env` から読み込み)で遅延初期化する。`Backtester.save_chart_to_sheet()` / `save_orders_to_sheet()` / `save_trades_to_sheet()` はこれに依存しており、スプレッドシートが未設定だと例外になる
+- `lib/metrics.py`: 成績の指標の計算。`year_freq(index)` は、行数 ÷ 暦年から1年あたりの本数を求める(vectorbt の既定値は `freq="D"` で365本/年で、営業日だけの日足では CAGR が小さく、シャープレシオが大きく出るため)。`calc_metrics()`(一括検証の指標)と `portfolio_stats()`(`stats()` の表示。`Backtester.display_stats()` などで使う)は、どちらもこの基準で年率換算する。年率の指標を新しく表示・計算するときも、`portfolio.stats()` などを直接呼ばずにこれらを使う
 - `lib/__init__.py`: `setup_logging()` が `config/logging_config.json` を読み込む(`lib` と `tools` の名前空間のロガーを定義)。新しいエントリーポイントのスクリプトでは、ログ出力の前に1回呼ぶこと
 
 ### エントリーポイント・テスト

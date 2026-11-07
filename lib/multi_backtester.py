@@ -1,33 +1,18 @@
 import itertools
 import logging
 from collections.abc import Callable, Iterable
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import vectorbt as vbt
-from vectorbt.portfolio.trades import Positions, Trades
 
 from lib import data_loader as dl
 from lib.backtester import JP_MARKET_PARAMS, Backtester, PreparedSignals
 from lib.data_sources import AbstractPriceSource
+from lib.metrics import METRIC_COLUMNS, calc_metrics
 
 logger = logging.getLogger(__name__)
-
-# 独立モードの結果に含める指標の列名
-METRIC_COLUMNS = [
-    "total_return",
-    "cagr",
-    "max_drawdown",
-    "sharpe",
-    "sortino",
-    "num_trades",
-    "win_rate",
-    "profit_factor",
-    "expectancy",
-    "avg_trade_return",
-    "exposure",
-]
 
 
 def load_universe(
@@ -79,63 +64,6 @@ def expand_param_grid(param_grid: dict[str, list] | None) -> list[dict[str, Any]
         return [{}]
     keys = list(param_grid.keys())
     return [dict(zip(keys, values)) for values in itertools.product(*param_grid.values())]
-
-
-def _year_freq(index: pd.Index) -> str | None:
-    """
-    年率換算に使う「1年あたりの本数」を、データの実際の暦日の長さから求めます。
-
-    freq="D" のままだと vectorbt は 1年=365本 として年率換算しますが、
-    日本株の日足は営業日だけ（1年あたり約245本）なので、CAGR が小さく、
-    シャープレシオが大きく出てしまいます。これを補正するために使います。
-
-    Args:
-        index (pd.Index): Portfolio の日付インデックス。
-
-    Returns:
-        str | None: vectorbt の year_freq に渡す値（例: '245.1 days'）。
-            期間が短すぎて求められない場合は None（vectorbt の既定値を使う）。
-    """
-    if len(index) < 2:
-        return None
-    years = (index[-1] - index[0]).days / 365.25
-    if years <= 0:
-        return None
-    # freq="D" では1本=1日として扱われるため、「本数/年」日を1年とみなす。
-    # エントリー当日に足を分けた行も本数に含める。vectorbt は行数で年率換算するため、
-    # 含めておけば CAGR は暦日の長さどおりになる
-    return f"{len(index) / years} days"
-
-
-def calc_metrics(portfolio: vbt.Portfolio) -> dict[str, float]:
-    """
-    Portfolio から、戦略の比較に使う主要な指標を計算します。
-
-    Args:
-        portfolio (vbt.Portfolio): 単一銘柄（または資金共有でグループ化済み）の Portfolio。
-
-    Returns:
-        dict[str, float]: METRIC_COLUMNS をキーとする指標の辞書。
-    """
-    # vectorbt の cached_property を Pylance が関数と見なすため、実際の型を明示する
-    trades = cast(Trades, portfolio.trades)
-    positions = cast(Positions, portfolio.positions)
-    num_trades = int(trades.count())
-    year_freq = _year_freq(portfolio.wrapper.index)
-    # annualized_return や trades.returns などは、vectorbt がクラスの定義時に追加する属性で、Pylance からは見えない
-    return {
-        "total_return": float(portfolio.total_return()),
-        "cagr": float(portfolio.annualized_return(year_freq=year_freq)),  # pyright: ignore[reportAttributeAccessIssue]
-        "max_drawdown": float(portfolio.max_drawdown()),  # pyright: ignore[reportAttributeAccessIssue]
-        "sharpe": float(portfolio.sharpe_ratio(year_freq=year_freq)),  # pyright: ignore[reportAttributeAccessIssue]
-        "sortino": float(portfolio.sortino_ratio(year_freq=year_freq)),  # pyright: ignore[reportAttributeAccessIssue]
-        "num_trades": num_trades,
-        "win_rate": float(trades.win_rate()) if num_trades else np.nan,
-        "profit_factor": float(trades.profit_factor()) if num_trades else np.nan,
-        "expectancy": float(trades.expectancy()) if num_trades else np.nan,
-        "avg_trade_return": float(trades.returns.mean()) if num_trades else np.nan,  # pyright: ignore[reportAttributeAccessIssue]
-        "exposure": float(positions.coverage()),
-    }
 
 
 class MultiBacktester:

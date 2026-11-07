@@ -7,7 +7,8 @@ import numpy as np
 import pytest
 
 from lib.backtester import SPLIT_BAR_OFFSET, Backtester, PreparedSignals
-from lib.multi_backtester import MultiBacktester, calc_metrics, expand_param_grid
+from lib.metrics import calc_metrics
+from lib.multi_backtester import MultiBacktester, expand_param_grid
 from lib.strategies.exits import AtrStopLoss, AtrTakeProfit
 from lib.strategies.indicators import ATRIndicator, MAIndicator
 from lib.strategies.position_sizing import RiskPercentageSizer

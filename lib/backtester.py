@@ -7,6 +7,7 @@ import pandas as pd
 import vectorbt as vbt
 
 import lib.data_saver as ds
+from lib.metrics import portfolio_stats
 from lib.strategies.exits import AbstractStopLoss, AbstractTakeProfit
 from lib.strategies.indicators import AbstractIndicator
 from lib.strategies.position_sizing import AbstractPositionSizer
@@ -371,8 +372,9 @@ class Backtester:
 
         print("-" * 40)
         print("【バックテスト結果サマリ】")
-        # 勝率、プロフィットファクター、ドローダウンなどが一括で計算されます
-        print(self.portfolio.stats())
+        # 勝率、プロフィットファクター、ドローダウンなどが一括で計算されます。
+        # 年率換算の基準は MultiBacktester の calc_metrics とそろえる
+        print(portfolio_stats(self.portfolio))
         print("-" * 40)
         print("【最新の注文履歴】")
         # 最新5件を表示

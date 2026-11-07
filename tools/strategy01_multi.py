@@ -5,6 +5,7 @@ import pandas_ta as ta  # noqa: F401
 
 from lib import setup_logging
 from lib.backtester import Backtester
+from lib.metrics import portfolio_stats
 from lib.multi_backtester import MultiBacktester, load_universe
 from lib.strategies.exits import (
     AtrStopLoss,
@@ -80,7 +81,7 @@ if __name__ == "__main__":
     portfolio = mb.run_portfolio(data, params={"short": 5, "long": 20, "tp_mult": 4})
     print("-" * 40)
     print("【資金共有モードの結果サマリ】")
-    print(portfolio.stats())
+    print(portfolio_stats(portfolio))
     portfolio.trades.records_readable.to_csv(  # pyright: ignore[reportFunctionMemberAccess]
         "multi_portfolio_trades.csv", index=False
     )

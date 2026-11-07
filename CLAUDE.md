@@ -69,7 +69,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 
 1. 各 indicator の `.generate(df)` を呼ぶ。これらは `df` を直接変更し、`short_ma`、`long_ma`、`atr` などの列を追加する
 2. 損切り/利確のオブジェクトから `sl` / `tp` の割合を計算し、**1日シフトする**。T日のエントリーに使う損切り/利確の割合は前日終値が基準になるため、「翌日」の約定に合わせてずらしている
-3. 全てのエントリーシグナルを **AND** で結合し、全てのエグジットシグナルも **AND** で結合する(`_generate_signals`: `pd.concat(...).all(axis=1)`)。**OR ではない**ので注意
+3. 全てのエントリーシグナルを **AND** で結合し、全てのエグジットシグナルも **AND** で結合する(`_generate_signals`: `pd.concat(...).all(axis=1)`)。**OR ではない**ので注意。各シグナルは `generate()` の時点で1日シフト済み(下記の `signals/` を参照)
 4. `PositionSizer` でポジションサイズを計算する。このとき、シフト済みの `sl_pct` を渡す。あわせて100株単元を調整後の株数に換算する(`_lot_size`: `100 × RawOpen / Open`。`RawOpen` がなければ100)。シミュレーションは調整後価格で行うので、分割・配当で価格が下方修正された過去ほど、実際の100株は調整後の株数では多くなるため
 5. `vbt.Portfolio.from_signals(...)` を呼ぶ。日本市場向けの制約がハードコードされている:
    - `size_granularity` / `min_size` は上記の単元で、**エントリーシグナルのある日だけ**かける。単元(調整後の株数)は配当落ち・分割のたびに変わるため、エグジットの日にもかけると全量を売れなくなる
@@ -96,7 +96,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 新しい indicator / signal / exit / sizer を追加するときは、該当サブフォルダの抽象クラスを継承し、そのサブフォルダの `__init__.py` からエクスポートすること。
 
 - `indicators/`(`AbstractIndicator`): 株価の DataFrame に列を追加する。例: `MAIndicator` は `pandas_ta` で `short_ma` / `long_ma` を、`ATRIndicator` は `atr` を追加する
-- `signals/`(`AbstractSignal`): エントリー/エグジットの条件を、bool の `pd.Series` で返す。例: `GoldenCrossSignal`、`DeadCrossSignal`、`InDateRangeSignal`、`ATRConditionSignal`。クロス系のシグナルは結果を1日シフトする(N日の終値で出たシグナルは、N+1日のエントリーになる)
+- `signals/`(`AbstractSignal`): エントリー/エグジットの条件を、bool の `pd.Series` で返す。例: `GoldenCrossSignal`、`DeadCrossSignal`、`InDateRangeSignal`、`ATRConditionSignal`。サブクラスの `_calculate()` はシフトせずに「T日の終値で分かる情報でT日の値」を返し、`AbstractSignal.generate()` が一括で1日シフトする(T日の終値で出たシグナルは、T+1日の始値で約定する)。日付だけで決まるものなど、T日の寄り付き前に分かるシグナルは、クラス属性 `shift_required = False` を宣言してシフトを止める(例: `InDateRangeSignal`)。既定値は `True` なので、宣言を忘れても1日遅れるだけで未来参照にはならない。`tests/test_signal_shift.py` の `_all_signals()` に新しいシグナルを足すと、未来の価格を書き換えて過去のシグナルが変わらないかを確かめる汎用テストの対象になる
 - `exits/`(`AbstractStopLoss` / `AbstractTakeProfit`): `Close` に対する比率の Series を返し、vectorbt の `sl_stop` / `tp_stop` として使われる。例: `AtrStopLoss` / `AtrTakeProfit` は `atr * multiplier / Close`
 - `position_sizing/`(`AbstractPositionSizer`): ポジションサイズを `pd.Series` で返す。`size_type`(`vectorbt.portfolio.enums.SizeType`)を宣言し、`vbt.Portfolio.from_signals` にそのまま渡される。`RiskPercentageSizer` は `risk_per_trade / sl_pct` を計算する(資産に対するリスク割合でのサイジング。kwargs で `sl_pct` を渡す必要がある)
 

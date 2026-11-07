@@ -24,5 +24,7 @@
   "python.testing.nosetestsEnabled": false,
   "python.analysis.extraPaths": [
     "${workspaceFolder}"
-  ]
+  ],
+  // 開いていないファイルも含めて、ワークスペース全体を Pylance で解析します
+  "python.analysis.diagnosticMode": "workspace"
 }

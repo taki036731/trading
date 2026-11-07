@@ -10,7 +10,10 @@ class InDateRangeSignal(AbstractSignal):
     """
     指定された日付範囲内であるかを判定するシグナル。
     特定の期間のみトレードを許可する場合などに使用します。
+    日付だけで決まり、その日の寄り付き前に分かるため、シフトしません。
     """
+
+    shift_required = False
 
     def __init__(self, begin: dt.datetime, end: dt.datetime):
         """

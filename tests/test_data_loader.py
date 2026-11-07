@@ -94,7 +94,7 @@ def test_last_cached_row_is_replaced_without_full_refetch(cache_dir):
     """キャッシュの最終行だけ値が違う（場中の確定前の値）場合は全期間を取り直さず、新しい値で置き換える"""
     full = make_prices("2024-01-01", 30)
     cached = full.iloc[:20].copy()
-    cached.iloc[-1, cached.columns.get_loc("Close")] += 50
+    cached.loc[cached.index[-1:], "Close"] += 50
     write_cache(cache_dir, "TEST", cached)
     fake = FakeSource(full)
 
@@ -196,8 +196,8 @@ def test_to_adjusted_with_raw_restores_pre_split_price():
 
     assert list(df.columns) == ["Open", "High", "Low", "Close", "Volume", "RawOpen"]
     np.testing.assert_allclose(
-        df["RawOpen"].values, [1000.0, 1010.0, 204.0, 206.0, 208.0]
+        df["RawOpen"].to_numpy(), [1000.0, 1010.0, 204.0, 206.0, 208.0]
     )
     ratio = raw["Adj Close"] / raw["Close"]
-    np.testing.assert_allclose(df["Open"].values, (raw["Open"] * ratio).values)
-    np.testing.assert_allclose(df["Close"].values, raw["Adj Close"].values)
+    np.testing.assert_allclose(df["Open"].to_numpy(), (raw["Open"] * ratio).to_numpy())
+    np.testing.assert_allclose(df["Close"].to_numpy(), raw["Adj Close"].to_numpy())

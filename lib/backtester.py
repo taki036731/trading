@@ -62,6 +62,9 @@ class PreparedSignals:
     exits: pd.Series
     sl_stop: pd.Series  # シフト済みの損切り幅（比率）
     tp_stop: pd.Series  # シフト済みの利確幅（比率）
+    # 損切りをトレーリングストップにするか。True なら SL ラインが保有中の最高値（High）を基準に上がっていく。
+    # 損切り幅はエントリー日の sl_stop で固定される（vectorbt の仕様）
+    sl_trail: bool
     size: pd.Series
     size_type: int
     # 100株単元を調整後の株数で表したもの。エントリーシグナルのある日だけ値を持つ
@@ -73,8 +76,8 @@ class PreparedSignals:
         from_signals のキーワード引数に変換します。
 
         Returns:
-            dict: close / open / high / low / price / entries / exits / sl_stop / tp_stop / size / size_type /
-                size_granularity / min_size。
+            dict: close / open / high / low / price / entries / exits / sl_stop / tp_stop / sl_trail / size /
+                size_type / size_granularity / min_size。
         """
         return {
             "close": self.close,
@@ -86,6 +89,7 @@ class PreparedSignals:
             "exits": self.exits,
             "sl_stop": self.sl_stop,
             "tp_stop": self.tp_stop,
+            "sl_trail": self.sl_trail,
             "size": self.size,
             "size_type": self.size_type,
             "size_granularity": self.size_granularity,
@@ -106,6 +110,11 @@ class PreparedSignals:
         そのため、分割は必ず prepare() の後に行います。
         同じ日に SL と TP の両方に届いた場合は、vectorbt の判定順で SL が優先されます。
 
+        トレーリングストップ（sl_trail=True）では、ラインへ届いたかに関係なく、エントリーのある日を全て分けます。
+        vectorbt はエントリーした足でトレーリングの最高値を更新しないため、分けないとエントリー当日の高値が
+        最高値に入らず、分けた日とラインの上がり方がそろわないためです。2行目では、判定の後に最高値を更新するので、
+        当日の高値で上がったラインが効くのは翌日からです（同じ足の中で未来の値は使いません）。
+
         Args:
             slippage (float): 約定価格に対するスリッページの割合。SL/TP ラインは
                 スリッページ込みの約定価格が基準になるため、判定にも使います。
@@ -115,8 +124,10 @@ class PreparedSignals:
         """
         # ラインの基準は約定価格（stop_entry_price="fillprice"）。始値基準だと、ラインの近くで分割が漏れる
         fill = self.open * (1 + slippage)
+        sl_on = self.sl_stop > 0
         touched = self.entries & (
-            ((self.sl_stop > 0) & (self.low <= fill * (1 - self.sl_stop)))
+            # トレーリングでは、エントリー当日の高値を最高値に入れるため、SL のある日は全て分ける
+            (sl_on & (self.sl_trail | (self.low <= fill * (1 - self.sl_stop))))
             | ((self.tp_stop > 0) & (self.high >= fill * (1 + self.tp_stop)))
         )
         if not touched.any():
@@ -144,6 +155,7 @@ class PreparedSignals:
             exits=_split(self.exits, no_signal),
             sl_stop=_split(self.sl_stop, self.sl_stop),
             tp_stop=_split(self.tp_stop, self.tp_stop),
+            sl_trail=self.sl_trail,
             size=_split(self.size, pd.Series(np.nan, index=index)),
             size_type=self.size_type,
             size_granularity=_split(self.size_granularity, pd.Series(np.nan, index=index)),
@@ -289,6 +301,7 @@ class Backtester:
             exits=exits,
             sl_stop=sl_pct,
             tp_stop=tp_pct,
+            sl_trail=self.sl.is_trailing,
             size=size,
             size_type=self.position_sizer.size_type,
             size_granularity=size_granularity,

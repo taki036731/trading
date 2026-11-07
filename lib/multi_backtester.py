@@ -236,7 +236,7 @@ class MultiBacktester:
 
         Returns:
             dict: from_signals のキーワード引数。キーは PreparedSignals.to_vbt_kwargs() と同じで、
-                size_type 以外の値は列=銘柄の DataFrame。
+                size_type / sl_trail 以外の値は列=銘柄の DataFrame。
         """
 
         def _wide(attr: str) -> pd.DataFrame:
@@ -266,6 +266,8 @@ class MultiBacktester:
             "tp_stop": _wide("tp_stop").fillna(0.0),
             "size": _wide("size").where(has_data),
             "size_type": next(iter(prepared.values())).size_type,
+            # 全銘柄が同じパラメータ（同じ factory の Backtester）なので、1つの値で足りる
+            "sl_trail": next(iter(prepared.values())).sl_trail,
             "size_granularity": _wide("size_granularity").where(has_data),
             "min_size": _wide("min_size").where(has_data, 0.0),
         }

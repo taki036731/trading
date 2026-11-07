@@ -4,7 +4,6 @@
 from dataclasses import fields
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from lib.backtester import SPLIT_BAR_OFFSET, Backtester, PreparedSignals
@@ -72,11 +71,11 @@ def test_run_independent_matches_single_backtester():
     assert len(summary) == 2 * 4
     assert summary["num_trades"].sum() > 0, "取引が発生するデータでテストする"
 
-    for row in summary.itertuples():
-        single = build_strategy(short=row.short, tp_mult=row.tp_mult)
-        expected = calc_metrics(single.run(data[row.ticker].copy()))
-        assert row.total_return == pytest.approx(expected["total_return"])
-        assert row.num_trades == expected["num_trades"]
+    for row in summary.to_dict("records"):
+        single = build_strategy(short=row["short"], tp_mult=row["tp_mult"])
+        expected = calc_metrics(single.run(data[row["ticker"]].copy()))
+        assert row["total_return"] == pytest.approx(expected["total_return"])
+        assert row["num_trades"] == expected["num_trades"]
 
 
 def test_run_independent_does_not_modify_input():

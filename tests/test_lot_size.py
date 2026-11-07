@@ -2,7 +2,6 @@
 # pyright: reportFunctionMemberAccess=false
 
 import numpy as np
-import pandas as pd
 
 from lib.backtester import UNIT_SHARES, Backtester
 from lib.multi_backtester import MultiBacktester
@@ -59,7 +58,7 @@ def test_lot_size_converts_real_unit_to_adjusted_shares():
 
     lot = Backtester._lot_size(df)
 
-    np.testing.assert_allclose(lot.values, 500.0)
+    np.testing.assert_allclose(lot.to_numpy(), 500.0)
 
 
 def test_entry_is_rounded_to_real_unit():

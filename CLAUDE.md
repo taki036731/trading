@@ -77,8 +77,9 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
    - `price=df["Open"]`(翌日始値で約定)
    - `stop_exit_price="stopmarket"`(SL/TP の決済にもスリッページをかける。既定値の `stoplimit` では0になる)
    - `fees` / `slippage` は `Backtester` の引数で差し替えられる(片道の割合。既定値は `DEFAULT_FEES=0.0`、`DEFAULT_SLIPPAGE=0.001`)。`run_portfolio` でも factory が作る `Backtester` の値を使う
+   - vectorbt はエントリーした足で SL/TP を判定しないため、エントリー当日に SL/TP ラインへ届く日だけ、足を2行に分けてから渡す(`PreparedSignals.split_entry_day_bars`)。1行目(元の日時)は始値だけの足で約定し、2行目(`SPLIT_BAR_OFFSET`=12:00)は始値と実際の H/L/C で SL/TP を判定する。判定のラインは、スリッページ込みの約定価格が基準。SL と TP の両方に届いた日は SL が優先される。シフト済みの値は元の行に残すので、分割は必ず `prepare()` の後に行う(分割後の行に `shift` をかけると、ずれが1日ではなく1行になる)。該当日があると、`Portfolio` のインデックスと決済の `Exit Timestamp` に 12:00 の行が入る
 
-`run()` は `prepare(df)`(上記 1〜4 を行い、1銘柄分の入力を `PreparedSignals` で返す。属性は全て `pd.Series`)と `from_signals` の呼び出しに分かれている。日本市場向けの固定条件は `JP_MARKET_PARAMS` にまとめてある(単元の制約は日ごとに変わるため `PreparedSignals` 側、取引コストは差し替えられるように `Backtester.cost_params` 側)。
+`run()` は `prepare(df)`(上記 1〜4 を行い、1銘柄分の入力を日次のまま `PreparedSignals` で返す。属性は全て `pd.Series`)と、足の分割、`from_signals` の呼び出しに分かれている。日本市場向けの固定条件は `JP_MARKET_PARAMS` にまとめてある(単元の制約は日ごとに変わるため `PreparedSignals` 側、取引コストは差し替えられるように `Backtester.cost_params` 側)。
 
 ### 複数銘柄・パラメータグリッド(`lib/multi_backtester.py`)
 
@@ -86,7 +87,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 
 - `run_independent(data)`: 銘柄 × パラメータの全組み合わせを独立した口座で実行し、1行1実行の指標の DataFrame を返す。CAGR・シャープレシオは、営業日の本数から求めた1年あたりの本数で年率換算する
 - `aggregate(summary)`: パラメータごとに銘柄横断の中央値・平均・プラス銘柄の割合を出す
-- `run_portfolio(data, params)`: 全銘柄を1つの口座(`cash_sharing=True`、`call_seq="auto"`)で運用する。銘柄ごとの `PreparedSignals` を `_combine()` で列=銘柄の DataFrame にまとめ、`from_signals` のキーワード引数(dict)として渡す(`PreparedSignals` には詰め直さない)。`SizeType.Percent` のサイザーは**現金残高**に対する割合になる。同じ日に買いが重なり現金が足りない場合は、`data` の銘柄の並び順で先着
+- `run_portfolio(data, params)`: 全銘柄を1つの口座(`cash_sharing=True`、`call_seq="auto"`)で運用する。銘柄ごとの `PreparedSignals` を(足を分割してから)`_combine()` で列=銘柄の DataFrame にまとめ、`from_signals` のキーワード引数(dict)として渡す(`PreparedSignals` には詰め直さない)。`SizeType.Percent` のサイザーは**現金残高**に対する割合になる。同じ日に買いが重なり現金が足りない場合は、`data` の銘柄の並び順で先着
 - `load_universe(tickers, start, end, source=None)`: `fetch_stock_data` を銘柄ごとに呼んで `{ticker: df}` を返す
 
 ### 戦略コンポーネント(`lib/strategies/`)

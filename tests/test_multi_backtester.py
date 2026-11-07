@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from lib.backtester import Backtester, PreparedSignals
+from lib.backtester import SPLIT_BAR_OFFSET, Backtester, PreparedSignals
 from lib.multi_backtester import MultiBacktester, calc_metrics, expand_param_grid
 from lib.strategies.exits import AtrStopLoss, AtrTakeProfit
 from lib.strategies.indicators import ATRIndicator, MAIndicator
@@ -239,3 +239,70 @@ def test_calc_metrics_annualizes_by_business_days():
     years = (df.index[-1] - df.index[0]).days / 365.25
     expected = (1 + metrics["total_return"]) ** (1 / years) - 1
     assert metrics["cagr"] == pytest.approx(expected, rel=1e-3)
+
+
+def build_narrow_stop_strategy() -> Backtester:
+    """エントリー当日にラインへ届く日が多く出るように、SL/TP の幅を狭くした戦略"""
+    return Backtester(
+        indicators=[MAIndicator("EMA", 5, 20), ATRIndicator(14)],
+        entries=[GoldenCrossSignal()],
+        exits=[DeadCrossSignal()],
+        tp=AtrTakeProfit(1),
+        sl=AtrStopLoss(0.5),
+        position_sizer=RiskPercentageSizer(0.02),
+    )
+
+
+def test_calc_metrics_annualizes_by_calendar_days_with_split_bars():
+    """
+    エントリー当日に足を分けて行が増えても、CAGR が暦日ベースの年率のままであることをテスト
+    """
+    df = create_random_walk_df(days=1000, seed=4)
+    pf = build_narrow_stop_strategy().run(df.copy())
+    assert len(pf.wrapper.index) > len(df), "足を分ける日が出るデータでテストする"
+
+    metrics = calc_metrics(pf)
+    years = (df.index[-1] - df.index[0]).days / 365.25
+    expected = (1 + metrics["total_return"]) ** (1 / years) - 1
+    assert metrics["cagr"] == pytest.approx(expected, rel=1e-3)
+
+
+def test_run_portfolio_single_ticker_matches_backtester_with_split_bars():
+    """
+    足を分ける日があっても、資金共有モードの1銘柄は Backtester.run と同じ資産推移になることをテスト
+    """
+    df = create_random_walk_df(days=500, seed=3)
+    expected = build_narrow_stop_strategy().run(df.copy()).value()
+    assert len(expected) > len(df), "足を分ける日が出るデータでテストする"
+
+    actual = MultiBacktester(build_narrow_stop_strategy).run_portfolio({"AAA": df}).value()
+    np.testing.assert_allclose(actual.values, expected.values)
+
+
+def test_run_portfolio_stops_on_entry_day():
+    """
+    資金共有モードでも、エントリー当日に SL ラインを割った銘柄はその日のうちに決済されることをテスト。
+    あわせて、その決済の現金は同じ日の始値の買い（他の銘柄）には使えないことを確認する
+    """
+    touched = golden_cross_df(10)
+    entry_day = touched.index[11]
+    touched.loc[entry_day, "Low"] = touched.loc[entry_day, "Open"] - 100  # SL ライン（2ATR=40 下）を割る
+
+    pf = MultiBacktester(build_manual_strategy).run_portfolio(
+        {"AAA": touched, "BBB": golden_cross_df(10)}
+    )
+    orders = pf.orders.records_readable
+
+    aaa = orders[orders["Column"] == "AAA"]
+    assert aaa["Side"].tolist() == ["Buy", "Sell"]
+    assert aaa["Timestamp"].tolist() == [entry_day, entry_day + SPLIT_BAR_OFFSET]
+
+    # BBB の買いは、AAA の当日の決済がない場合と同じサイズ（同じ日の始値の時点では現金が戻っていない）
+    baseline = MultiBacktester(build_manual_strategy).run_portfolio(
+        {"AAA": golden_cross_df(10), "BBB": golden_cross_df(10)}
+    ).orders.records_readable
+    bbb = orders[orders["Column"] == "BBB"]
+    assert bbb["Size"].tolist() == baseline[baseline["Column"] == "BBB"]["Size"].tolist()
+
+    # 分けた行でも、口座の資産は NaN にならない
+    assert not pf.value().isna().any()

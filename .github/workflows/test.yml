@@ -1,0 +1,41 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: リポジトリのチェックアウト
+        uses: actions/checkout@v4
+
+      # Dev Container と同じ Python のバージョン
+      - name: Python のセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: uv のセットアップ
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: requirements.txt
+
+      - name: 依存パッケージの導入
+        id: install
+        run: uv pip install --system -r requirements.txt
+
+      # テストは合成データのみで動く(ネットワークに依存しない)
+      - name: pytest
+        run: pytest
+
+      # Pylance と同じ判定(設定は pyrightconfig.json)。pytest が失敗しても、依存の導入まで成功していれば実行する
+      # バージョンは固定する(更新で突然失敗しないように)
+      - name: pyright(Pylance 相当の型チェック)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npx -y pyright@1.1.408

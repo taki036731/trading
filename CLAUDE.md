@@ -35,6 +35,12 @@ pytest tests/test_strategy.py::test_golden_cross_and_take_profit
 python -m tools.strategy01
 ```
 
+型チェック(Pylance と同じ判定。設定は `pyrightconfig.json` の `standard` モードで、対象は `lib/` / `tools/` / `tests/`。古い `tools/fetch_prices.py` と `sample/` は対象外):
+```bash
+npx -y pyright@1.1.408
+```
+pandas の型は `pandas-stubs`(Pylance の同梱スタブと同じバージョン)で解決する。`pyrightconfig.json` があるため、エディタの Pylance も VS Code 側の型チェックモードの設定ではなく、このファイルを使う。
+
 リント/フォーマットのコマンドは未設定(`pyproject.toml` / `ruff.toml` なし)。Dev Container に VS Code 拡張の `ruff` は入っている。
 
 ## 作業ルール
@@ -46,7 +52,7 @@ python -m tools.strategy01
   - 型を直して解消できるものは、型を直す(型注釈の修正、`typing.cast()` など)。ignore で黙らせない
   - vectorbt 由来などで避けられないものだけ、`# pyright: ignore[<ルール名>]` で無視するルールを限定する。行の全ルールを無視する `# type: ignore` は使わない。同じ ignore が何箇所も必要なら、ヘルパーにまとめて1箇所にする
   - `tests/` は vectorbt の結果を直接見る箇所が多いため、ファイルの先頭で `# pyright: reportFunctionMemberAccess=false` を指定してよい(このルールだけをファイル単位で無視する)
-  - Pylance はエディタで開いているファイルしか解析しない。解析結果を確認できなかったファイルは、その旨を報告する
+  - Pylance はエディタで開いているファイルしか解析しないことがあるため、上記の `pyright` コマンドでも確認する
 - indicator / signal / exit / sizer を追加したときは、対応するテストも書く
 - 依存パッケージの追加は、先に相談する
 - `.env` と `cread/` の中身は読まない・出力しない(認証情報が入っている)
@@ -118,5 +124,6 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 
 ## その他
 
-- `.github/workflows/merge-code.yml` は `main` への push ごとに、全ての `*.py` / `*.sql` を結合して `latest_code.md` を作り、`rclone` で Google Drive にアップロードする(Gemini に読ませる用)。CI ではなく、テストやリントの GitHub Action はない
+- `.github/workflows/merge-code.yml` は `main` への push ごとに、全ての `*.py` / `*.sql` を結合して `latest_code.md` を作り、`rclone` で Google Drive にアップロードする(Gemini に読ませる用)。CI ではない
+- `.github/workflows/test.yml` は `main` への push、全ての PR、手動実行のときに、`pytest` と `pyright` を実行する(CI)。`pyright` は `pytest` が失敗しても実行する
 - 認証情報(`SPREADSHEET_ID`、`CREDENTIALS_FILE`)は `.env`(gitignore 済み)にある。`cread/` には Google サービスアカウントの JSON 認証ファイルがある(gitignore 済み)

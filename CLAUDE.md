@@ -95,7 +95,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 
 - `run_independent(data)`: 銘柄 × パラメータの全組み合わせを独立した口座で実行し、1行1実行の指標(`lib/metrics.py` の `calc_metrics`)の DataFrame を返す
 - `aggregate(summary)`: パラメータごとに銘柄横断の中央値・平均・プラス銘柄の割合を出す。取引0回の銘柄は中央値・平均・`positive_ratio` から除外し、件数を `zero_trade_tickers` に出す
-- `run_portfolio(data, params)`: 全銘柄を1つの口座(`cash_sharing=True`、`call_seq="auto"`)で運用する。銘柄ごとの `PreparedSignals` を(足を分割してから)`_combine()` で列=銘柄の DataFrame にまとめ、`from_signals` のキーワード引数(dict)として渡す(`PreparedSignals` には詰め直さない)。`SizeType.Percent` のサイザーは**現金残高**に対する割合になる。同じ日に買いが重なり現金が足りない場合は、`data` の銘柄の並び順で先着
+- `run_portfolio(data, params)`: 全銘柄を1つの口座(`cash_sharing=True`、`call_seq="auto"`)で運用する。銘柄ごとの `PreparedSignals` を(足を分割してから)`_combine()` で列=銘柄の DataFrame にまとめ、`from_signals` のキーワード引数(dict)として渡す(`PreparedSignals` には詰め直さない)。`SizeType.Percent` のサイザーは**現金残高**に対する割合になる。同じ日に買いが重なり現金が足りない場合は、**サイズの小さい順**に先着(`call_seq="auto"` が注文の大きさの順に処理するため)。サイズが同じなら `data` の銘柄の並び順で、サイザーの上限(`max_size`)に達した銘柄同士もこれになる
 - `load_universe(tickers, start, end, source=None)`: `fetch_stock_data` を銘柄ごとに呼んで `{ticker: df}` を返す
 
 ### 戦略コンポーネント(`lib/strategies/`)
@@ -106,7 +106,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 - `indicators/`(`AbstractIndicator`): 株価の DataFrame に列を追加する。例: `MAIndicator` は `pandas_ta` で `short_ma` / `long_ma` を、`ATRIndicator` は `atr` を追加する
 - `signals/`(`AbstractSignal`): エントリー/エグジットの条件を、bool の `pd.Series` で返す。例: `GoldenCrossSignal`、`DeadCrossSignal`、`InDateRangeSignal`、`ATRConditionSignal`。サブクラスの `_calculate()` はシフトせずに「T日の終値で分かる情報でT日の値」を返し、`AbstractSignal.generate()` が一括で1日シフトする(T日の終値で出たシグナルは、T+1日の始値で約定する)。日付だけで決まるものなど、T日の寄り付き前に分かるシグナルは、クラス属性 `shift_required = False` を宣言してシフトを止める(例: `InDateRangeSignal`)。既定値は `True` なので、宣言を忘れても1日遅れるだけで未来参照にはならない。`tests/test_signal_shift.py` の `_all_signals()` に新しいシグナルを足すと、未来の価格を書き換えて過去のシグナルが変わらないかを確かめる汎用テストの対象になる
 - `exits/`(`AbstractStopLoss` / `AbstractTakeProfit`): `Close` に対する比率の Series を返し、vectorbt の `sl_stop` / `tp_stop` として使われる。例: `AtrStopLoss` / `AtrTakeProfit` は `atr * multiplier / Close`
-- `position_sizing/`(`AbstractPositionSizer`): ポジションサイズを `pd.Series` で返す。`size_type`(`vectorbt.portfolio.enums.SizeType`)を宣言し、`vbt.Portfolio.from_signals` にそのまま渡される。`RiskPercentageSizer` は `risk_per_trade / sl_pct` を計算する(資産に対するリスク割合でのサイジング。kwargs で `sl_pct` を渡す必要がある)。損切り幅が NaN / 0 以下の日はサイズを NaN にして注文を出さない。損切り幅を使うサイザーはクラス属性 `requires_sl_pct = True` を宣言する。`Backtester` は `sl=None` と組み合わせると `ValueError` にする
+- `position_sizing/`(`AbstractPositionSizer`): ポジションサイズを `pd.Series` で返す。`size_type`(`vectorbt.portfolio.enums.SizeType`)を宣言し、`vbt.Portfolio.from_signals` にそのまま渡される。`RiskPercentageSizer` は `risk_per_trade / sl_pct` を計算する(資産に対するリスク割合でのサイジング。kwargs で `sl_pct` を渡す必要がある)。損切り幅が NaN / 0 以下の日はサイズを NaN にして注文を出さない。損切り幅を使うサイザーはクラス属性 `requires_sl_pct = True` を宣言する。サイズの上限は `AbstractPositionSizer` の `max_size`(単位は `size_type` に従う。既定値は `None` = 上限なし)で、`generate()` が `clip` をかける。`RiskPercentageSizer` の既定値は 1.0(現金の100%。vectorbt は超えた分を黙って現金全額に丸めるため)。`Backtester.prepare(df, name)` は、エントリーの日のうちサイズが上限に達した件数を警告する(その分、実際のリスクは `risk_per_trade` より小さい)。`Backtester` は `sl=None` と組み合わせると `ValueError` にする
 
 ### データ層
 

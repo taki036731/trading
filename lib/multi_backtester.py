@@ -290,8 +290,9 @@ class MultiBacktester:
             "price": _wide("price"),
             "entries": _wide("entries").fillna(False).astype(bool) & has_data,
             "exits": _wide("exits").fillna(False).astype(bool) & has_data,
-            "sl_stop": _wide("sl_stop").fillna(0.0),
-            "tp_stop": _wide("tp_stop").fillna(0.0),
+            # 欠損日・データのない期間は NaN（ストップなし）のまま。0 で埋めると建値のストップになる
+            "sl_stop": _wide("sl_stop"),
+            "tp_stop": _wide("tp_stop"),
             "size": _wide("size").where(has_data),
             "size_type": next(iter(prepared.values())).size_type,
             # 全銘柄が同じパラメータ（同じ factory の Backtester）なので、1つの値で足りる

@@ -68,8 +68,10 @@ class PreparedSignals:
     price: pd.Series  # 約定価格（翌日始値）
     entries: pd.Series
     exits: pd.Series
-    sl_stop: pd.Series  # シフト済みの損切り幅（比率）
-    tp_stop: pd.Series  # シフト済みの利確幅（比率）
+    # シフト済みの損切り・利確幅（比率）。NaN はストップなし。
+    # vectorbt では 0 でもストップは有効で、ラインが約定価格（建値）になるため、「なし」に 0 は使わない
+    sl_stop: pd.Series
+    tp_stop: pd.Series
     # 損切りをトレーリングストップにするか。True なら SL ラインが保有中の最高値（High）を基準に上がっていく。
     # 損切り幅はエントリー日の sl_stop で固定される（vectorbt の仕様）
     sl_trail: bool
@@ -117,6 +119,7 @@ class PreparedSignals:
         シフト済みのシグナル・SL/TP 幅・サイズは、元の日時の行にそのまま残します（行をずらさない）。
         そのため、分割は必ず prepare() の後に行います。
         同じ日に SL と TP の両方に届いた場合は、vectorbt の判定順で SL が優先されます。
+        SL/TP 幅が NaN の日は、その側のストップがないものとして扱います。
 
         トレーリングストップ（sl_trail=True）では、ラインへ届いたかに関係なく、エントリーのある日を全て分けます。
         vectorbt はエントリーした足でトレーリングの最高値を更新しないため、分けないとエントリー当日の高値が
@@ -132,11 +135,12 @@ class PreparedSignals:
         """
         # ラインの基準は約定価格（stop_entry_price="fillprice"）。始値基準だと、ラインの近くで分割が漏れる
         fill = self.open * (1 + slippage)
-        sl_on = self.sl_stop > 0
+        # NaN はストップなし。0 は vectorbt では建値のストップとして有効なので、「あり」として扱う
+        sl_on = self.sl_stop.notna()
         touched = self.entries & (
             # トレーリングでは、エントリー当日の高値を最高値に入れるため、SL のある日は全て分ける
             (sl_on & (self.sl_trail | (self.low <= fill * (1 - self.sl_stop))))
-            | ((self.tp_stop > 0) & (self.high >= fill * (1 + self.tp_stop)))
+            | (self.tp_stop.notna() & (self.high >= fill * (1 + self.tp_stop)))
         )
         if not touched.any():
             return self
@@ -181,11 +185,12 @@ class Backtester:
 
     def __init__(
         self,
+        *,
         indicators: list[AbstractIndicator],
         entries: list[AbstractSignal],
         exits: list[AbstractSignal],
-        tp: AbstractTakeProfit,
-        sl: AbstractStopLoss,
+        tp: AbstractTakeProfit | None = None,
+        sl: AbstractStopLoss | None = None,
         position_sizer: AbstractPositionSizer,
         init_cash: float = 1000000.0,
         fees: float = DEFAULT_FEES,
@@ -199,15 +204,22 @@ class Backtester:
             indicators (list[AbstractIndicator]): 計算するインジケーターのリスト。
             entries (list[AbstractSignal]): エントリー（買い）条件シグナルのリスト。
             exits (list[AbstractSignal]): エグジット（売り）条件シグナルのリスト。
-            tp (AbstractTakeProfit): 利確ロジックの実装。
-            sl (AbstractStopLoss): 損切りロジックの実装。
+            tp (AbstractTakeProfit | None): 利確ロジックの実装。None の場合は利確しません。
+            sl (AbstractStopLoss | None): 損切りロジックの実装。None の場合は損切りしません。
             position_sizer (AbstractPositionSizer): ポジションサイズ決定ロジック。
             init_cash (float): 初期資金。デフォルトは 1,000,000.0。
             fees (float): 売買代金に対する手数料の割合（片道）。デフォルトは DEFAULT_FEES。
             slippage (float): 約定価格に対するスリッページの割合（片道）。デフォルトは DEFAULT_SLIPPAGE。
             min_fill_rate (float | None): エントリー注文の約定率がこれを下回ったら、run() で警告を出します。
                 デフォルトは DEFAULT_MIN_FILL_RATE。None の場合は警告しません。
+
+        Raises:
+            ValueError: 損切り幅を必要とするサイザー（requires_sl_pct=True）に、sl=None を組み合わせた場合。
         """
+        if sl is None and position_sizer.requires_sl_pct:
+            raise ValueError(
+                f"{type(position_sizer).__name__} は損切り幅を使うため、sl を省略できません。"
+            )
         self.indicators = indicators
         self.entries = entries
         self.exits = exits
@@ -278,9 +290,12 @@ class Backtester:
         # 2. 動的な利確・損切り幅の設定
         # ---------------------------------------------------------
         # 前日の終値を基に、翌日の損切り・利確%を決める。
-        # そのため、StopLoss / TakeProfit のパーセンテージを「翌日約定用」にシフトする
-        sl_pct = self.sl.generate(df).shift(1).fillna(0.0)
-        tp_pct = self.tp.generate(df).shift(1).fillna(0.0)
+        # そのため、StopLoss / TakeProfit のパーセンテージを「翌日約定用」にシフトする。
+        # 先頭の行や指標の計算前の期間は NaN（ストップなし）のまま残す。
+        # 0 で埋めると、vectorbt では建値のストップになる
+        no_stop = pd.Series(np.nan, index=df.index)
+        sl_pct = (self.sl.generate(df) if self.sl else no_stop).shift(1)
+        tp_pct = (self.tp.generate(df) if self.tp else no_stop).shift(1)
 
         # ---------------------------------------------------------
         # 3. エントリーとエグジットのシグナルを生成
@@ -313,7 +328,7 @@ class Backtester:
             exits=exits,
             sl_stop=sl_pct,
             tp_stop=tp_pct,
-            sl_trail=self.sl.is_trailing,
+            sl_trail=self.sl.is_trailing if self.sl else False,
             size=size,
             size_type=self.position_sizer.size_type,
             size_granularity=size_granularity,

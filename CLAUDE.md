@@ -74,7 +74,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 `lib/backtester.py` の `Backtester` クラスが全体を取りまとめる。`run(df)` の処理は次のとおり。
 
 1. 各 indicator の `.generate(df)` を呼ぶ。これらは `df` を直接変更し、`short_ma`、`long_ma`、`atr` などの列を追加する
-2. 損切り/利確のオブジェクトから `sl` / `tp` の割合を計算し、**1日シフトする**。T日のエントリーに使う損切り/利確の割合は前日終値が基準になるため、「翌日」の約定に合わせてずらしている
+2. 損切り/利確のオブジェクトから `sl` / `tp` の割合を計算し、**1日シフトする**。T日のエントリーに使う損切り/利確の割合は前日終値が基準になるため、「翌日」の約定に合わせてずらしている。`sl` / `tp` は省略でき(`None`)、省略時は全行 NaN になる。「ストップなし」は **NaN** で表し、0 は使わない(vectorbt では幅 0 でもストップは有効で、建値のストップになる)。シフトで空く先頭の行や指標の計算前の期間も NaN のまま残す(0 で埋めない)
 3. 全てのエントリーシグナルを **AND** で結合し、全てのエグジットシグナルも **AND** で結合する(`_generate_signals`: `pd.concat(...).all(axis=1)`)。**OR ではない**ので注意。各シグナルは `generate()` の時点で1日シフト済み(下記の `signals/` を参照)
 4. `PositionSizer` でポジションサイズを計算する。このとき、シフト済みの `sl_pct` を渡す。あわせて100株単元を調整後の株数に換算する(`_lot_size`: `100 × RawOpen / Open`。`RawOpen` がなければ100)。シミュレーションは調整後価格で行うので、分割・配当で価格が下方修正された過去ほど、実際の100株は調整後の株数では多くなるため
 5. `vbt.Portfolio.from_signals(...)` を呼ぶ。日本市場向けの制約がハードコードされている:
@@ -84,8 +84,8 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
    - `stop_exit_price="stopmarket"`(SL/TP の決済にもスリッページをかける。既定値の `stoplimit` では0になる)
    - `log=True`(注文の記録を残す。1単元に届かないなどで捨てられたエントリー注文は取引履歴に残らないため、`portfolio.logs` から数える。売買の結果は変わらない)。`run()` は約定率が `Backtester` の引数 `min_fill_rate`(既定値 `DEFAULT_MIN_FILL_RATE`=0.8、`None` で無効)を下回ると警告する
    - `fees` / `slippage` は `Backtester` の引数で差し替えられる(片道の割合。既定値は `DEFAULT_FEES=0.0`、`DEFAULT_SLIPPAGE=0.001`)。`run_portfolio` でも factory が作る `Backtester` の値を使う
-   - `sl_trail` は損切りの `is_trailing` をそのまま渡す(`PreparedSignals.sl_trail`)。トレーリングでは SL ラインが保有中の最高値(`High`)を基準に上がる。損切り幅はエントリー日の `sl_stop` で固定される。vectorbt は各足で判定してから最高値を更新するため、当日の高値で上がったラインが効くのは翌日から
-   - vectorbt はエントリーした足で SL/TP を判定しないため、エントリー当日に SL/TP ラインへ届く日だけ、足を2行に分けてから渡す(`PreparedSignals.split_entry_day_bars`)。1行目(元の日時)は始値だけの足で約定し、2行目(`SPLIT_BAR_OFFSET`=12:00)は始値と実際の H/L/C で SL/TP を判定する。判定のラインは、スリッページ込みの約定価格が基準。SL と TP の両方に届いた日は SL が優先される。`sl_trail=True` のときは、ラインへ届いたかに関係なく、エントリーのある日を全て分ける(分けないとエントリー当日の高値が最高値に入らないため)。シフト済みの値は元の行に残すので、分割は必ず `prepare()` の後に行う(分割後の行に `shift` をかけると、ずれが1日ではなく1行になる)。該当日があると、`Portfolio` のインデックスと決済の `Exit Timestamp` に 12:00 の行が入る
+   - `sl_trail` は損切りの `is_trailing` をそのまま渡す(`PreparedSignals.sl_trail`。`sl=None` なら `False`)。トレーリングでは SL ラインが保有中の最高値(`High`)を基準に上がる。損切り幅はエントリー日の `sl_stop` で固定される。vectorbt は各足で判定してから最高値を更新するため、当日の高値で上がったラインが効くのは翌日から
+   - vectorbt はエントリーした足で SL/TP を判定しないため、エントリー当日に SL/TP ラインへ届く日だけ、足を2行に分けてから渡す(`PreparedSignals.split_entry_day_bars`)。1行目(元の日時)は始値だけの足で約定し、2行目(`SPLIT_BAR_OFFSET`=12:00)は始値と実際の H/L/C で SL/TP を判定する。判定のラインは、スリッページ込みの約定価格が基準。SL/TP の幅が NaN の側は「なし」として判定しない。SL と TP の両方に届いた日は SL が優先される。`sl_trail=True` のときは、ラインへ届いたかに関係なく、エントリーのある日を全て分ける(分けないとエントリー当日の高値が最高値に入らないため)。シフト済みの値は元の行に残すので、分割は必ず `prepare()` の後に行う(分割後の行に `shift` をかけると、ずれが1日ではなく1行になる)。該当日があると、`Portfolio` のインデックスと決済の `Exit Timestamp` に 12:00 の行が入る
 
 `run()` は `prepare(df)`(上記 1〜4 を行い、1銘柄分の入力を日次のまま `PreparedSignals` で返す。属性は全て `pd.Series`)と、足の分割、`from_signals` の呼び出しに分かれている。日本市場向けの固定条件は `JP_MARKET_PARAMS` にまとめてある(単元の制約は日ごとに変わるため `PreparedSignals` 側、取引コストは差し替えられるように `Backtester.cost_params` 側)。
 
@@ -106,7 +106,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 - `indicators/`(`AbstractIndicator`): 株価の DataFrame に列を追加する。例: `MAIndicator` は `pandas_ta` で `short_ma` / `long_ma` を、`ATRIndicator` は `atr` を追加する
 - `signals/`(`AbstractSignal`): エントリー/エグジットの条件を、bool の `pd.Series` で返す。例: `GoldenCrossSignal`、`DeadCrossSignal`、`InDateRangeSignal`、`ATRConditionSignal`。サブクラスの `_calculate()` はシフトせずに「T日の終値で分かる情報でT日の値」を返し、`AbstractSignal.generate()` が一括で1日シフトする(T日の終値で出たシグナルは、T+1日の始値で約定する)。日付だけで決まるものなど、T日の寄り付き前に分かるシグナルは、クラス属性 `shift_required = False` を宣言してシフトを止める(例: `InDateRangeSignal`)。既定値は `True` なので、宣言を忘れても1日遅れるだけで未来参照にはならない。`tests/test_signal_shift.py` の `_all_signals()` に新しいシグナルを足すと、未来の価格を書き換えて過去のシグナルが変わらないかを確かめる汎用テストの対象になる
 - `exits/`(`AbstractStopLoss` / `AbstractTakeProfit`): `Close` に対する比率の Series を返し、vectorbt の `sl_stop` / `tp_stop` として使われる。例: `AtrStopLoss` / `AtrTakeProfit` は `atr * multiplier / Close`
-- `position_sizing/`(`AbstractPositionSizer`): ポジションサイズを `pd.Series` で返す。`size_type`(`vectorbt.portfolio.enums.SizeType`)を宣言し、`vbt.Portfolio.from_signals` にそのまま渡される。`RiskPercentageSizer` は `risk_per_trade / sl_pct` を計算する(資産に対するリスク割合でのサイジング。kwargs で `sl_pct` を渡す必要がある)
+- `position_sizing/`(`AbstractPositionSizer`): ポジションサイズを `pd.Series` で返す。`size_type`(`vectorbt.portfolio.enums.SizeType`)を宣言し、`vbt.Portfolio.from_signals` にそのまま渡される。`RiskPercentageSizer` は `risk_per_trade / sl_pct` を計算する(資産に対するリスク割合でのサイジング。kwargs で `sl_pct` を渡す必要がある)。損切り幅が NaN / 0 以下の日はサイズを NaN にして注文を出さない。損切り幅を使うサイザーはクラス属性 `requires_sl_pct = True` を宣言する。`Backtester` は `sl=None` と組み合わせると `ValueError` にする
 
 ### データ層
 

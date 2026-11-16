@@ -1,0 +1,6 @@
+{
+  "typeCheckingMode": "standard",
+  "pythonVersion": "3.13",
+  "include": ["lib", "tools", "tests"],
+  "exclude": ["tools/fetch_prices.py", "sample", "data", "cread"]
+}

@@ -9,6 +9,8 @@ class RiskPercentageSizer(AbstractPositionSizer):
     1トレードあたりの許容リスク（資産のn%）に基づいてポジションサイズを決定するクラス。
     """
 
+    requires_sl_pct = True
+
     def __init__(self, risk_per_trade: float = 0.02):
         """
         RiskPercentageSizer を初期化します。
@@ -37,7 +39,7 @@ class RiskPercentageSizer(AbstractPositionSizer):
             **kwargs: 'sl_pct' (pd.Series) が必須。エントリ時点の損切り幅（比率）。
 
         Returns:
-            pd.Series: ポジションサイズ（資産に対する比率）。
+            pd.Series: ポジションサイズ（資産に対する比率）。損切り幅が NaN または 0 以下の日は NaN。
 
         Raises:
             ValueError: 'sl_pct' が指定されていない場合。
@@ -50,6 +52,8 @@ class RiskPercentageSizer(AbstractPositionSizer):
 
         # サイズ = 許容リスク / 損切り幅
         # 例: 損切り幅が5% (0.05) でリスク2% (0.02) なら、資産の40% (0.4) を投入
-        size = self.risk_per_trade / sl_pct
+        # 損切り幅がない日（NaN）や 0 以下の日は、リスクを決められないため NaN にして注文を出さない
+        # （NaN の割り算は NaN になり、0 で割ると inf になる）
+        size = (self.risk_per_trade / sl_pct).where(sl_pct > 0)
 
         return size

@@ -9,6 +9,9 @@ class AbstractPositionSizer(ABC):
     売買株数（ポジションサイズ）のロジックを管理する抽象基底クラス。
     """
 
+    # 計算に損切り幅（kwargs の sl_pct）を使うか。True のサイザーは、Backtester で sl を省略できない
+    requires_sl_pct: bool = False
+
     def __init__(self, size_type: int = SizeType.Amount, **kargs):
         """
         AbstractPositionSizer を初期化します。

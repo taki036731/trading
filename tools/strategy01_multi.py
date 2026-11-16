@@ -1,10 +1,11 @@
 import datetime
+import logging
 
 import pandas as pd
 import pandas_ta as ta  # noqa: F401
 
 from lib import setup_logging
-from lib.backtester import Backtester
+from lib.backtester import UNIT_SHARES, Backtester
 from lib.metrics import portfolio_stats
 from lib.multi_backtester import MultiBacktester, load_universe
 from lib.strategies.exits import (
@@ -19,6 +20,9 @@ from lib.strategies.signals import (
     GoldenCrossSignal,
     InDateRangeSignal,
 )
+
+# python -m で実行すると __name__ が "__main__" になるため、tools のロガー設定が効く名前を固定で付ける
+logger = logging.getLogger("tools.strategy01_multi")
 
 # 検証する銘柄（資金共有モードで同じ日に買いが重なった場合は、この順で先着）
 TICKERS = ["7203.T", "6758.T", "9984.T", "8306.T", "6861.T"]
@@ -59,6 +63,32 @@ def build_strategy(short: int = 5, long: int = 20, tp_mult: float = 4) -> Backte
     )
 
 
+def lot_cost_table(data: dict[str, pd.DataFrame], init_cash: float) -> pd.DataFrame:
+    """
+    銘柄ごとに、1単元（実際の100株）の金額と、初期資金に対する割合を求めます。
+
+    1単元が高い銘柄は、サイズが1単元に届かずエントリー注文が捨てられやすくなります。
+    期間中の最小・最大を出すのは、株価が上がって途中から買えなくなる銘柄があるためです。
+
+    Args:
+        data (dict[str, pd.DataFrame]): ティッカーをキー、株価データを値とする辞書。
+        init_cash (float): 初期資金。
+
+    Returns:
+        pd.DataFrame: 銘柄をインデックスとする表。列は lot_cost_min / lot_cost_max / max_ratio。
+    """
+    rows = {}
+    for ticker, df in data.items():
+        raw_open = df["RawOpen"] if "RawOpen" in df.columns else df["Open"]
+        lot_cost = raw_open * UNIT_SHARES
+        rows[ticker] = {
+            "lot_cost_min": lot_cost.min(),
+            "lot_cost_max": lot_cost.max(),
+            "max_ratio": lot_cost.max() / init_cash,
+        }
+    return pd.DataFrame.from_dict(rows, orient="index")
+
+
 if __name__ == "__main__":
     setup_logging()
     pd.set_option("display.width", 200)
@@ -66,6 +96,14 @@ if __name__ == "__main__":
 
     data = load_universe(TICKERS, start="2010-01-01")
     mb = MultiBacktester(build_strategy, PARAM_GRID)
+
+    # 0. 初期資金に対する1単元の金額（高い銘柄はエントリー注文が捨てられやすい）
+    init_cash = build_strategy().init_cash
+    lot_costs = lot_cost_table(data, init_cash)
+    print("【1単元の金額（初期資金に対する割合）】")
+    print(lot_costs)
+    for ticker in lot_costs.index[lot_costs["max_ratio"] > 1]:
+        logger.warning(f"[{ticker}] 期間中に1単元の金額が初期資金を超えています。")
 
     # 1. 銘柄 × パラメータごとに独立して実行
     summary = mb.run_independent(data)

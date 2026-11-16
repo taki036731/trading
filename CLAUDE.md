@@ -82,6 +82,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
    - `direction="longonly"`
    - `price=df["Open"]`(翌日始値で約定)
    - `stop_exit_price="stopmarket"`(SL/TP の決済にもスリッページをかける。既定値の `stoplimit` では0になる)
+   - `log=True`(注文の記録を残す。1単元に届かないなどで捨てられたエントリー注文は取引履歴に残らないため、`portfolio.logs` から数える。売買の結果は変わらない)。`run()` は約定率が `Backtester` の引数 `min_fill_rate`(既定値 `DEFAULT_MIN_FILL_RATE`=0.8、`None` で無効)を下回ると警告する
    - `fees` / `slippage` は `Backtester` の引数で差し替えられる(片道の割合。既定値は `DEFAULT_FEES=0.0`、`DEFAULT_SLIPPAGE=0.001`)。`run_portfolio` でも factory が作る `Backtester` の値を使う
    - `sl_trail` は損切りの `is_trailing` をそのまま渡す(`PreparedSignals.sl_trail`)。トレーリングでは SL ラインが保有中の最高値(`High`)を基準に上がる。損切り幅はエントリー日の `sl_stop` で固定される。vectorbt は各足で判定してから最高値を更新するため、当日の高値で上がったラインが効くのは翌日から
    - vectorbt はエントリーした足で SL/TP を判定しないため、エントリー当日に SL/TP ラインへ届く日だけ、足を2行に分けてから渡す(`PreparedSignals.split_entry_day_bars`)。1行目(元の日時)は始値だけの足で約定し、2行目(`SPLIT_BAR_OFFSET`=12:00)は始値と実際の H/L/C で SL/TP を判定する。判定のラインは、スリッページ込みの約定価格が基準。SL と TP の両方に届いた日は SL が優先される。`sl_trail=True` のときは、ラインへ届いたかに関係なく、エントリーのある日を全て分ける(分けないとエントリー当日の高値が最高値に入らないため)。シフト済みの値は元の行に残すので、分割は必ず `prepare()` の後に行う(分割後の行に `shift` をかけると、ずれが1日ではなく1行になる)。該当日があると、`Portfolio` のインデックスと決済の `Exit Timestamp` に 12:00 の行が入る
@@ -93,7 +94,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 `MultiBacktester(factory, param_grid)` は、パラメータを受け取って新しい `Backtester` を返す関数(factory)を使って、複数銘柄を一括で検証する。
 
 - `run_independent(data)`: 銘柄 × パラメータの全組み合わせを独立した口座で実行し、1行1実行の指標(`lib/metrics.py` の `calc_metrics`)の DataFrame を返す
-- `aggregate(summary)`: パラメータごとに銘柄横断の中央値・平均・プラス銘柄の割合を出す
+- `aggregate(summary)`: パラメータごとに銘柄横断の中央値・平均・プラス銘柄の割合を出す。取引0回の銘柄は中央値・平均・`positive_ratio` から除外し、件数を `zero_trade_tickers` に出す
 - `run_portfolio(data, params)`: 全銘柄を1つの口座(`cash_sharing=True`、`call_seq="auto"`)で運用する。銘柄ごとの `PreparedSignals` を(足を分割してから)`_combine()` で列=銘柄の DataFrame にまとめ、`from_signals` のキーワード引数(dict)として渡す(`PreparedSignals` には詰め直さない)。`SizeType.Percent` のサイザーは**現金残高**に対する割合になる。同じ日に買いが重なり現金が足りない場合は、`data` の銘柄の並び順で先着
 - `load_universe(tickers, start, end, source=None)`: `fetch_stock_data` を銘柄ごとに呼んで `{ticker: df}` を返す
 
@@ -112,7 +113,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 - `lib/data_sources/`(`AbstractPriceSource`): 株価データの取得元。`name`(キャッシュのフォルダ名)と `_fetch()` を実装し、公開メソッドの `fetch()` が必須列(`Open/High/Low/Close/Volume` は分割・配当の調整後、`RawOpen` は当時の実際の始値)を検証する。取得元ごとに必要な価格の補正も、ここで行う(補正だけを別の部品にはしない)。現在は `YFinanceSource` のみで、`auto_adjust=True` と同じ調整後価格を作り、`RawOpen` は `Stock Splits` から分割比率を掛け戻して作る(yfinance の未調整の価格も分割調整済みのため)。将来 J-Quants API などに差し替えられるようにしている
 - `lib/data_loader.py`: `fetch_stock_data(ticker, start, end, source=None)` が取得元(省略時は `YFinanceSource`)から取得し、`data/<取得元の名前>/<ticker>.parquet` にキャッシュする(必須列のない古いキャッシュは全期間を取り直す)。毎回全期間を取り直さず、キャッシュ済みの最終日以降だけを取得して、結合・重複排除する差分更新を行う
 - `lib/data_saver.py`: `gspread` で DataFrame を Google Sheets に書き込む。環境変数 `SPREADSHEET_ID` / `CREDENTIALS_FILE`(`.env` から読み込み)で遅延初期化する。`Backtester.save_chart_to_sheet()` / `save_orders_to_sheet()` / `save_trades_to_sheet()` はこれに依存しており、スプレッドシートが未設定だと例外になる
-- `lib/metrics.py`: 成績の指標の計算。`year_freq(index)` は、行数 ÷ 暦年から1年あたりの本数を求める(vectorbt の既定値は `freq="D"` で365本/年で、営業日だけの日足では CAGR が小さく、シャープレシオが大きく出るため)。`calc_metrics()`(一括検証の指標)と `portfolio_stats()`(`stats()` の表示。`Backtester.display_stats()` などで使う)は、どちらもこの基準で年率換算する。年率の指標を新しく表示・計算するときも、`portfolio.stats()` などを直接呼ばずにこれらを使う
+- `lib/metrics.py`: 成績の指標の計算。`year_freq(index)` は、行数 ÷ 暦年から1年あたりの本数を求める(vectorbt の既定値は `freq="D"` で365本/年で、営業日だけの日足では CAGR が小さく、シャープレシオが大きく出るため)。`calc_metrics()`(一括検証の指標)と `portfolio_stats()`(`stats()` の表示。`Backtester.display_stats()` などで使う)は、どちらもこの基準で年率換算する。年率の指標を新しく表示・計算するときも、`portfolio.stats()` などを直接呼ばずにこれらを使う。`entry_order_stats()` は、列(銘柄)ごとにエントリー注文の数・約定数・捨てられた数と理由(`OrderStatusInfo`)を返す(保有中のシグナルは注文にならないので数えない)。`calc_metrics()` の `entry_orders` / `entry_dropped` / `entry_fill_rate` もこれを使う。サイザーを追加したときは、この値で注文が通っているか確認する
 - `lib/__init__.py`: `setup_logging()` が `config/logging_config.json` を読み込む(`lib` と `tools` の名前空間のロガーを定義)。新しいエントリーポイントのスクリプトでは、ログ出力の前に1回呼ぶこと
 
 ### エントリーポイント・テスト

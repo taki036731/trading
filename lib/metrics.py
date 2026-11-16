@@ -1,9 +1,17 @@
+import logging
 from typing import cast
 
 import numpy as np
 import pandas as pd
 import vectorbt as vbt
+from vectorbt.portfolio.enums import OrderStatus, OrderStatusInfo
+from vectorbt.portfolio.logs import Logs
 from vectorbt.portfolio.trades import Positions, Trades
+
+logger = logging.getLogger(__name__)
+
+# エントリー注文の約定率がこれを下回ったら警告する（Backtester の引数 min_fill_rate で変えられる）
+DEFAULT_MIN_FILL_RATE = 0.8
 
 # 独立モードの結果に含める指標の列名
 METRIC_COLUMNS = [
@@ -18,6 +26,9 @@ METRIC_COLUMNS = [
     "expectancy",
     "avg_trade_return",
     "exposure",
+    "entry_orders",
+    "entry_dropped",
+    "entry_fill_rate",
 ]
 
 
@@ -67,6 +78,82 @@ def portfolio_stats(portfolio: vbt.Portfolio) -> pd.Series:
     return cast(pd.Series, portfolio.stats(settings=dict(year_freq=freq)))
 
 
+def entry_order_stats(portfolio: vbt.Portfolio) -> pd.DataFrame:
+    """
+    エントリー（買い）注文のうち、約定した数と捨てられた数を、列（銘柄）ごとに集計します。
+
+    サイズが1単元に届かない注文などは、vectorbt がエラーもなく捨てるため、取引履歴には残りません。
+    注文の記録（from_signals の log=True。JP_MARKET_PARAMS で指定済み）から数えます。
+    保有中に出たエントリーシグナルは注文にならないため、数に含みません。
+
+    Args:
+        portfolio (vbt.Portfolio): log=True で実行した Portfolio。
+
+    Returns:
+        pd.DataFrame: 列（銘柄）をインデックスとする集計。列は次のとおり。
+            - entry_orders: 出したエントリー注文の数
+            - entry_filled: そのうち約定した数（一部約定を含む）
+            - entry_dropped: そのうち捨てられた数
+            - entry_fill_rate: entry_filled / entry_orders（注文がなければ NaN）
+            - dropped_<理由>: 捨てられた理由（OrderStatusInfo の名前）ごとの数。出た理由の列だけ
+    """
+    # vectorbt の cached_property を Pylance が関数と見なすため、実際の型を明示する
+    records = cast(Logs, portfolio.logs).values
+    columns = portfolio.wrapper.columns
+    # longonly なので、買い注文は要求サイズが正のもの（売りは負）
+    buys = records[records["req_size"] > 0]
+    filled = buys["res_status"] == OrderStatus.Filled
+
+    result = pd.DataFrame(
+        {
+            "entry_orders": np.bincount(buys["col"], minlength=len(columns)),
+            "entry_filled": np.bincount(buys["col"][filled], minlength=len(columns)),
+        },
+        index=columns,
+    )
+    result["entry_dropped"] = result["entry_orders"] - result["entry_filled"]
+    result["entry_fill_rate"] = (
+        result["entry_filled"] / result["entry_orders"].replace(0, np.nan)
+    )
+
+    dropped = buys[~filled]
+    for info in np.unique(dropped["res_status_info"]):
+        name = OrderStatusInfo._fields[int(info)]
+        result[f"dropped_{name}"] = np.bincount(
+            dropped["col"][dropped["res_status_info"] == info], minlength=len(columns)
+        )
+    return result
+
+
+def warn_low_fill_rate(
+    stats: pd.DataFrame, min_fill_rate: float | None, label: str = ""
+) -> None:
+    """
+    エントリー注文の約定率が min_fill_rate を下回った列（銘柄）について、警告を出します。
+
+    Args:
+        stats (pd.DataFrame): entry_order_stats の戻り値。
+        min_fill_rate (float | None): 警告のしきい値（0〜1）。None の場合は何もしません。
+        label (str): 警告の先頭に付ける名前（銘柄・パラメータなど）。
+    """
+    if min_fill_rate is None:
+        return
+    reason_cols = [c for c in stats.columns if c.startswith("dropped_")]
+    for col, row in stats.iterrows():
+        rate = row["entry_fill_rate"]
+        if pd.isna(rate) or rate >= min_fill_rate:
+            continue
+        reasons = ", ".join(
+            f"{c.removeprefix('dropped_')}={int(row[c])}" for c in reason_cols if row[c]
+        )
+        name = " ".join(str(x) for x in (label, col if len(stats) > 1 else "") if x)
+        logger.warning(
+            f"[{name}] エントリー注文の約定率が低くなっています: "
+            f"{rate:.0%}（{int(row['entry_filled'])}/{int(row['entry_orders'])}件、"
+            f"捨てられた理由: {reasons}）"
+        )
+
+
 def calc_metrics(portfolio: vbt.Portfolio) -> dict[str, float]:
     """
     Portfolio から、戦略の比較に使う主要な指標を計算します。
@@ -95,4 +182,25 @@ def calc_metrics(portfolio: vbt.Portfolio) -> dict[str, float]:
         "expectancy": float(trades.expectancy()) if num_trades else np.nan,
         "avg_trade_return": float(trades.returns.mean()) if num_trades else np.nan,  # pyright: ignore[reportAttributeAccessIssue]
         "exposure": float(positions.coverage()),
+        **_entry_metrics(portfolio),
+    }
+
+
+def _entry_metrics(portfolio: vbt.Portfolio) -> dict[str, float]:
+    """
+    calc_metrics 用に、エントリー注文の集計を全列の合計で返します。
+
+    Args:
+        portfolio (vbt.Portfolio): log=True で実行した Portfolio。
+
+    Returns:
+        dict[str, float]: entry_orders / entry_dropped / entry_fill_rate。
+    """
+    stats = entry_order_stats(portfolio)
+    orders = int(stats["entry_orders"].sum())
+    filled = int(stats["entry_filled"].sum())
+    return {
+        "entry_orders": orders,
+        "entry_dropped": orders - filled,
+        "entry_fill_rate": filled / orders if orders else np.nan,
     }

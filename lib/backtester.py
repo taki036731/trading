@@ -7,7 +7,12 @@ import pandas as pd
 import vectorbt as vbt
 
 import lib.data_saver as ds
-from lib.metrics import portfolio_stats
+from lib.metrics import (
+    DEFAULT_MIN_FILL_RATE,
+    entry_order_stats,
+    portfolio_stats,
+    warn_low_fill_rate,
+)
 from lib.strategies.exits import AbstractStopLoss, AbstractTakeProfit
 from lib.strategies.indicators import AbstractIndicator
 from lib.strategies.position_sizing import AbstractPositionSizer
@@ -36,6 +41,9 @@ JP_MARKET_PARAMS: dict[str, Any] = {
     # SL と TP を分けて指定できないため、実際には指値で出せる TP にもかかる（保守的な側に倒す）
     "stop_exit_price": "stopmarket",
     "freq": "D",  # 日足データ
+    # 注文の記録を残す。1単元に届かないなどで捨てられた注文は取引履歴に残らないため、
+    # portfolio.logs から数える（lib.metrics.entry_order_stats）。売買の結果は変わらない
+    "log": True,
 }
 
 # エントリー当日を2行に分けるときの、2行目（始値より後の値動き）の時刻
@@ -182,6 +190,7 @@ class Backtester:
         init_cash: float = 1000000.0,
         fees: float = DEFAULT_FEES,
         slippage: float = DEFAULT_SLIPPAGE,
+        min_fill_rate: float | None = DEFAULT_MIN_FILL_RATE,
     ):
         """
         Backtester を初期化します。
@@ -196,6 +205,8 @@ class Backtester:
             init_cash (float): 初期資金。デフォルトは 1,000,000.0。
             fees (float): 売買代金に対する手数料の割合（片道）。デフォルトは DEFAULT_FEES。
             slippage (float): 約定価格に対するスリッページの割合（片道）。デフォルトは DEFAULT_SLIPPAGE。
+            min_fill_rate (float | None): エントリー注文の約定率がこれを下回ったら、run() で警告を出します。
+                デフォルトは DEFAULT_MIN_FILL_RATE。None の場合は警告しません。
         """
         self.indicators = indicators
         self.entries = entries
@@ -206,6 +217,7 @@ class Backtester:
         self.init_cash = init_cash
         self.fees = fees
         self.slippage = slippage
+        self.min_fill_rate = min_fill_rate
         self.portfolio: vbt.Portfolio | None = None
         self.df: pd.DataFrame | None = None
         self.entries_series: pd.Series | None = None
@@ -343,16 +355,18 @@ class Backtester:
         # vectorbt の cached_property を Pylance が関数と見なすため、このルールだけ無視する
         return portfolio.orders.records_readable  # pyright: ignore[reportFunctionMemberAccess]
 
-    def run(self, df: pd.DataFrame) -> vbt.Portfolio:
+    def run(self, df: pd.DataFrame, name: str = "") -> vbt.Portfolio:
         """
         バックテストを実行します。
 
         prepare() で作った入力を vectorbt に渡してシミュレーションします。
         エントリー当日に SL/TP ラインへ届く日は、足を2行に分けてから渡します（split_entry_day_bars）。
         そのため、Portfolio のインデックスには、元の日付に加えて該当日の 12:00 の行が入ります。
+        エントリー注文の約定率が min_fill_rate を下回った場合は、警告を出します。
 
         Args:
             df (pd.DataFrame): バックテストに使用する株価データ。
+            name (str): 警告に付ける名前（銘柄・パラメータなど）。
 
         Returns:
             vbt.Portfolio: バックテスト結果を含む vectorbt の Portfolio オブジェクト。
@@ -370,6 +384,9 @@ class Backtester:
             init_cash=self.init_cash,  # 初期資金
             **self.cost_params,
             **JP_MARKET_PARAMS,
+        )
+        warn_low_fill_rate(
+            entry_order_stats(self.portfolio), self.min_fill_rate, label=name
         )
         return self.portfolio
 

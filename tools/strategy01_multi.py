@@ -24,7 +24,7 @@ from lib.strategies.signals import (
 # python -m で実行すると __name__ が "__main__" になるため、tools のロガー設定が効く名前を固定で付ける
 logger = logging.getLogger("tools.strategy01_multi")
 
-# 検証する銘柄（資金共有モードで同じ日に買いが重なった場合は、この順で先着）
+# 検証する銘柄（資金共有モードで同じ日に買いが重なった場合は、サイズの小さい順に先着。サイズが同じならこの順）
 TICKERS = ["7203.T", "6758.T", "9984.T", "8306.T", "6861.T"]
 
 # 検証するパラメータの候補（全組み合わせを実行する）

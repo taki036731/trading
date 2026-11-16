@@ -192,7 +192,9 @@ class MultiBacktester:
         - 各銘柄で Backtester.prepare を実行し（シフトの扱いは単一銘柄と同じ）、
           列=銘柄の DataFrame にまとめて from_signals を1回呼びます
         - call_seq="auto" により、同じ日は売りを先に処理してから買いを処理します
-        - 同じ日に複数銘柄で買いシグナルが出て現金が足りない場合は、data の銘柄の並び順で先着になります
+        - 同じ日に複数銘柄で買いシグナルが出て現金が足りない場合は、サイズの小さい順に先着になります
+          （call_seq="auto" は注文の大きさの順に処理するため）。サイズが同じなら data の銘柄の並び順です。
+          サイザーの上限（max_size）に達した銘柄同士は同じサイズになるため、data の並び順になります
         - RiskPercentageSizer など SizeType.Percent のサイザーは、資産全体ではなく
           その時点の「現金残高」に対する割合になります
         - 日付は全銘柄の和集合にそろえます。データのない日はエントリー/エグジットを False、
@@ -231,9 +233,9 @@ class MultiBacktester:
             cost_params = backtester.cost_params
             min_fill_rate = backtester.min_fill_rate
             # エントリー当日の SL/TP 判定のための足の分割は、Backtester.run と同じく prepare の後に行う
-            prepared[ticker] = backtester.prepare(df.copy()).split_entry_day_bars(
-                backtester.slippage
-            )
+            prepared[ticker] = backtester.prepare(
+                df.copy(), name=f"資金共有 {params} {ticker}"
+            ).split_entry_day_bars(backtester.slippage)
 
         size_types = {p.size_type for p in prepared.values()}
         if len(size_types) != 1:

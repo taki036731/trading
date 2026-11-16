@@ -11,15 +11,23 @@ class RiskPercentageSizer(AbstractPositionSizer):
 
     requires_sl_pct = True
 
-    def __init__(self, risk_per_trade: float = 0.02):
+    def __init__(self, risk_per_trade: float = 0.02, max_size: float | None = 1.0):
         """
         RiskPercentageSizer を初期化します。
 
+        損切り幅が risk_per_trade より小さいと、サイズが 1.0（現金の100%）を超えます。
+        vectorbt は 1.0 を超えた分を黙って現金全額に丸めるため、既定値では 1.0 で上限を切り、
+        上限に達したエントリーの件数を Backtester.prepare() が警告します。
+        上限に達したエントリーの実際のリスクは、risk_per_trade より小さくなります。
+
         Args:
             risk_per_trade (float): 1トレードあたりの許容リスク（0.02 = 2%）。
+            max_size (float | None): サイズ（現金に対する割合）の上限。デフォルトは 1.0。
         """
         # 資産に対する割合で指定するため SizeType.Percent を使用
-        super().__init__(size_type=SizeType.Percent, risk_per_trade=risk_per_trade)
+        super().__init__(
+            size_type=SizeType.Percent, max_size=max_size, risk_per_trade=risk_per_trade
+        )
         self.risk_per_trade = risk_per_trade
 
     @property

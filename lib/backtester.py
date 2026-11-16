@@ -263,7 +263,7 @@ class Backtester:
         results = [s.generate(df) for s in signals]
         return pd.concat(results, axis=1).all(axis=1)
 
-    def prepare(self, df: pd.DataFrame) -> PreparedSignals:
+    def prepare(self, df: pd.DataFrame, name: str = "") -> PreparedSignals:
         """
         シミュレーションの直前までの処理を行い、vectorbt に渡す入力をまとめて返します。
 
@@ -273,9 +273,11 @@ class Backtester:
         4. ポジションサイズと100株単元の決定
 
         複数銘柄を一括で検証する MultiBacktester からも、この処理を共通で使います。
+        サイズがサイザーの上限（max_size）に達したエントリーがあれば、件数を警告します。
 
         Args:
             df (pd.DataFrame): バックテストに使用する株価データ（インジケーターの列が追加されます）。
+            name (str): 警告に付ける名前（銘柄・パラメータなど）。
 
         Returns:
             PreparedSignals: from_signals に渡す価格・シグナル・SL/TP・サイズ。
@@ -308,6 +310,7 @@ class Backtester:
         # ---------------------------------------------------------
         # サイズ計算にもDay TのSL%を渡す(shift(1)した配列を渡す)
         size = self.position_sizer.generate(df, sl_pct=sl_pct)
+        self._warn_capped_size(size, entries, name)
 
         # 100株単元の制約はエントリーの日だけにかける。
         # 単元を調整後の株数で表すと配当落ち・分割のたびに値が変わるため、
@@ -333,6 +336,31 @@ class Backtester:
             size_type=self.position_sizer.size_type,
             size_granularity=size_granularity,
             min_size=min_size,
+        )
+
+    def _warn_capped_size(self, size: pd.Series, entries: pd.Series, name: str) -> None:
+        """
+        エントリーのある日のうち、サイズがサイザーの上限（max_size）に達した件数を警告します。
+
+        上限に達したエントリーは、サイザーの想定（RiskPercentageSizer なら risk_per_trade）より
+        小さいリスクしか取っていません。ちょうど上限の日も数えます。
+
+        Args:
+            size (pd.Series): 上限を切った後のポジションサイズ。
+            entries (pd.Series): エントリーシグナル。
+            name (str): 警告に付ける名前（銘柄・パラメータなど）。
+        """
+        max_size = self.position_sizer.max_size
+        if max_size is None:
+            return
+        n_entries = int(entries.sum())
+        n_capped = int((entries & (size >= max_size)).sum())
+        if n_capped == 0:
+            return
+        prefix = f"[{name}] " if name else ""
+        logger.warning(
+            f"{prefix}ポジションサイズが上限（{max_size}）に達したエントリーが "
+            f"{n_capped}/{n_entries} 件あります。これらの実際のリスクは、サイザーの想定より小さくなります。"
         )
 
     @staticmethod
@@ -386,7 +414,7 @@ class Backtester:
         Returns:
             vbt.Portfolio: バックテスト結果を含む vectorbt の Portfolio オブジェクト。
         """
-        prepared = self.prepare(df)
+        prepared = self.prepare(df, name=name)
 
         # 状態を保持 (参照のみ)
         self.df = df

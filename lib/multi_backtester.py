@@ -10,7 +10,12 @@ import vectorbt as vbt
 from lib import data_loader as dl
 from lib.backtester import JP_MARKET_PARAMS, Backtester, PreparedSignals
 from lib.data_sources import AbstractPriceSource
-from lib.metrics import METRIC_COLUMNS, calc_metrics
+from lib.metrics import (
+    METRIC_COLUMNS,
+    calc_metrics,
+    entry_order_stats,
+    warn_low_fill_rate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +107,7 @@ class MultiBacktester:
 
         各実行は Backtester.run と同じ処理なので、単一銘柄で実行した場合と結果は一致します。
         indicator が DataFrame を直接書き換えるため、実行ごとに df のコピーを渡します。
+        エントリー注文の約定率が低い実行は、Backtester.run が銘柄・パラメータ付きで警告します。
 
         Args:
             data (dict[str, pd.DataFrame]): ティッカーをキー、株価データを値とする辞書。
@@ -114,7 +120,7 @@ class MultiBacktester:
         for params in self.param_sets:
             for ticker, df in data.items():
                 backtester = self.factory(**params)
-                portfolio = backtester.run(df.copy())
+                portfolio = backtester.run(df.copy(), name=f"{ticker} {params}")
                 rows.append({"ticker": ticker, **params, **calc_metrics(portfolio)})
         columns = ["ticker", *self._param_names(), *METRIC_COLUMNS]
         return pd.DataFrame(rows, columns=columns)
@@ -124,6 +130,8 @@ class MultiBacktester:
         run_independent の結果を、パラメータごとに銘柄横断で集計します。
 
         1銘柄だけ良いパラメータではなく、多くの銘柄で安定して良いパラメータを探すために使います。
+        取引が0回の銘柄（1単元を買えず、注文が全て捨てられた銘柄など）は戦略を評価できないため、
+        positive_ratio と各指標の中央値・平均からは除外し、件数を zero_trade_tickers に出します。
 
         Args:
             summary (pd.DataFrame): run_independent の戻り値。
@@ -131,24 +139,36 @@ class MultiBacktester:
         Returns:
             pd.DataFrame: パラメータごとの集計。列は次のとおり。
                 - num_tickers: 銘柄数
-                - positive_ratio: total_return がプラスの銘柄の割合
-                - <指標>_median / <指標>_mean: 各指標の銘柄横断の中央値・平均
+                - num_traded_tickers: 取引が1回以上あった銘柄数（集計の対象）
+                - zero_trade_tickers: 取引が0回の銘柄数（集計から除外）
+                - positive_ratio: total_return がプラスの銘柄の割合（取引があった銘柄のうち）
+                - <指標>_median / <指標>_mean: 各指標の銘柄横断の中央値・平均（取引があった銘柄のみ）
                 - total_trades: 取引回数の合計
+                - fill_rate_median: エントリー注文の約定率の銘柄横断の中央値（全銘柄。注文のない銘柄は除く）
+                - total_entry_dropped: 捨てられたエントリー注文の数の合計
         """
         param_names = self._param_names()
         metrics = ["total_return", "cagr", "max_drawdown", "sharpe", "win_rate", "profit_factor"]
 
         def _agg(group: pd.DataFrame) -> pd.Series:
+            traded = group[group["num_trades"] > 0]
             result = {
                 "num_tickers": len(group),
-                "positive_ratio": float((group["total_return"] > 0).mean()),
+                "num_traded_tickers": len(traded),
+                "zero_trade_tickers": len(group) - len(traded),
+                # 取引があった銘柄がなければ NaN（0 にすると「全銘柄マイナス」と区別できない）
+                "positive_ratio": (
+                    float((traded["total_return"] > 0).mean()) if len(traded) else np.nan
+                ),
             }
             for m in metrics:
                 # profit_factor は負けトレードがないと inf になるため、集計からは除外する
-                values = group[m].replace([np.inf, -np.inf], np.nan)
+                values = traded[m].replace([np.inf, -np.inf], np.nan)
                 result[f"{m}_median"] = values.median()
                 result[f"{m}_mean"] = values.mean()
             result["total_trades"] = int(group["num_trades"].sum())
+            result["fill_rate_median"] = group["entry_fill_rate"].median()
+            result["total_entry_dropped"] = int(group["entry_dropped"].sum())
             return pd.Series(result)
 
         if not param_names:
@@ -177,7 +197,9 @@ class MultiBacktester:
           その時点の「現金残高」に対する割合になります
         - 日付は全銘柄の和集合にそろえます。データのない日はエントリー/エグジットを False、
           サイズを NaN にして注文を出しません。終値は時価評価のため前方埋めします（過去方向のみ）
-        - 手数料・スリッページは、factory が作る Backtester の値を使います
+        - 手数料・スリッページ・約定率の警告のしきい値（min_fill_rate）は、factory が作る Backtester の値を使います
+        - エントリー注文の約定率が低い銘柄は警告します。資金共有では、1単元に届かない注文に加えて、
+          現金が足りない注文（NoCashLong など）も捨てられます
         - エントリー当日に SL/TP ラインへ届く日は、銘柄ごとに足を2行に分けます（split_entry_day_bars）。
           他の銘柄の2行目は、値動きのない足（データのない日と同じ扱い）になります
 
@@ -201,11 +223,13 @@ class MultiBacktester:
         prepared: dict[str, PreparedSignals] = {}
         cash = init_cash
         cost_params: dict[str, Any] = {}
+        min_fill_rate: float | None = None
         for ticker, df in data.items():
             backtester = self.factory(**params)
             if cash is None:
                 cash = backtester.init_cash
             cost_params = backtester.cost_params
+            min_fill_rate = backtester.min_fill_rate
             # エントリー当日の SL/TP 判定のための足の分割は、Backtester.run と同じく prepare の後に行う
             prepared[ticker] = backtester.prepare(df.copy()).split_entry_day_bars(
                 backtester.slippage
@@ -216,7 +240,7 @@ class MultiBacktester:
             raise ValueError(f"エラー: 銘柄間で size_type が異なります。：{size_types}")
 
         combined = self._combine(prepared)
-        return vbt.Portfolio.from_signals(
+        portfolio = vbt.Portfolio.from_signals(
             **combined,
             init_cash=cash,
             group_by=True,  # 全銘柄を1つの口座としてまとめる
@@ -225,6 +249,10 @@ class MultiBacktester:
             **cost_params,
             **JP_MARKET_PARAMS,
         )
+        warn_low_fill_rate(
+            entry_order_stats(portfolio), min_fill_rate, label=f"資金共有 {params}"
+        )
+        return portfolio
 
     @staticmethod
     def _combine(prepared: dict[str, PreparedSignals]) -> dict:

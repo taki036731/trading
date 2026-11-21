@@ -1,5 +1,6 @@
+import datetime as dt
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 from typing import Any, cast
 
 import numpy as np
@@ -48,6 +49,44 @@ JP_MARKET_PARAMS: dict[str, Any] = {
 
 # エントリー当日を2行に分けるときの、2行目（始値より後の値動き）の時刻
 SPLIT_BAR_OFFSET = pd.Timedelta(hours=12)
+
+# 評価期間の開始日・終了日に渡せる型（pd.Timestamp に変換できるもの）
+DateLike = str | dt.date | pd.Timestamp
+
+
+def period_mask(
+    index: pd.Index, start: DateLike | None, end: DateLike | None
+) -> np.ndarray:
+    """
+    インデックスのうち、評価期間 [start, end]（両端を含む）に入る行を返します。
+
+    Args:
+        index (pd.Index): 日付のインデックス。
+        start (DateLike | None): 評価期間の開始日。None の場合は先頭から。
+        end (DateLike | None): 評価期間の終了日。None の場合は末尾まで。
+
+    Returns:
+        np.ndarray: 評価期間に入る行が True の bool 配列。
+
+    Raises:
+        ValueError: start が end より後の場合、または評価期間に行がない場合。
+    """
+    start_ts = pd.Timestamp(start) if start is not None else None
+    end_ts = pd.Timestamp(end) if end is not None else None
+    if start_ts is not None and end_ts is not None and start_ts > end_ts:
+        raise ValueError(
+            f"エラー: 評価期間の開始日 {start_ts} が終了日 {end_ts} より後です。"
+        )
+    mask = np.ones(len(index), dtype=bool)
+    if start_ts is not None:
+        mask &= np.asarray(index >= start_ts)
+    if end_ts is not None:
+        mask &= np.asarray(index <= end_ts)
+    if not mask.any():
+        raise ValueError(
+            f"エラー: 評価期間 [{start_ts}, {end_ts}] にデータがありません。"
+        )
+    return mask
 
 
 @dataclass
@@ -105,6 +144,36 @@ class PreparedSignals:
             "size_granularity": self.size_granularity,
             "min_size": self.min_size,
         }
+
+    def between(
+        self, start: DateLike | None, end: DateLike | None
+    ) -> "PreparedSignals":
+        """
+        評価期間 [start, end]（両端を含む）の行だけを切り出したものを返します。
+
+        シフト済みの値を行ごと切り出すだけなので、評価期間の初日のシグナルや SL/TP 幅には、
+        前日（評価期間より前のウォームアップ期間）の終値までの情報が入ります（未来の情報は入りません）。
+        足の分割（split_entry_day_bars）より前に行います。
+
+        Args:
+            start (DateLike | None): 評価期間の開始日。None の場合は先頭から。
+            end (DateLike | None): 評価期間の終了日。None の場合は末尾まで。
+
+        Returns:
+            PreparedSignals: 評価期間の行だけの入力。start と end がともに None なら self をそのまま返します。
+
+        Raises:
+            ValueError: start が end より後の場合、または評価期間に行がない場合。
+        """
+        if start is None and end is None:
+            return self
+        mask = period_mask(self.close.index, start, end)
+        sliced = {
+            f.name: value[mask]
+            for f in fields(self)
+            if isinstance(value := getattr(self, f.name), pd.Series)
+        }
+        return replace(self, **sliced)
 
     def split_entry_day_bars(self, slippage: float) -> "PreparedSignals":
         """
@@ -287,7 +356,13 @@ class Backtester:
         results = [s.generate(df) for s in signals]
         return pd.concat(results, axis=1).all(axis=1)
 
-    def prepare(self, df: pd.DataFrame, name: str = "") -> PreparedSignals:
+    def prepare(
+        self,
+        df: pd.DataFrame,
+        name: str = "",
+        start: DateLike | None = None,
+        end: DateLike | None = None,
+    ) -> PreparedSignals:
         """
         シミュレーションの直前までの処理を行い、vectorbt に渡す入力をまとめて返します。
         入力の df は書き換えず、コピーにインジケーターの列を追加して使います。
@@ -296,6 +371,11 @@ class Backtester:
         2. 動的な利確・損切り幅の算出（翌日約定用に1日シフト）
         3. エントリー・エグジットのシグナル生成
         4. ポジションサイズと100株単元の決定
+        5. 評価期間 [start, end] の行の切り出し
+
+        1〜4 は df の全期間で計算し、その後で評価期間を切り出します。評価期間より前の行は、
+        インジケーターのウォームアップにだけ使われ、売買にも年率の指標の計算にも入りません。
+        評価期間の初日にインジケーターの列や損切り幅が NaN の場合は、ウォームアップが足りないと警告します。
 
         複数銘柄を一括で検証する MultiBacktester からも、この処理を共通で使います。
         サイズがサイザーの上限（max_size）に達したエントリーがあれば、件数を警告します。
@@ -303,22 +383,35 @@ class Backtester:
         Args:
             df (pd.DataFrame): バックテストに使用する株価データ（書き換えません）。
             name (str): 警告に付ける名前（銘柄・パラメータなど）。
+            start (DateLike | None): 評価期間の開始日（その日を含む）。None の場合は df の先頭から。
+            end (DateLike | None): 評価期間の終了日（その日を含む）。None の場合は df の末尾まで。
 
         Returns:
-            PreparedSignals: from_signals に渡す価格・シグナル・SL/TP・サイズ。
-        """
-        return self._prepare(df.copy(), name)
+            PreparedSignals: 評価期間の、from_signals に渡す価格・シグナル・SL/TP・サイズ。
 
-    def _prepare(self, df: pd.DataFrame, name: str) -> PreparedSignals:
+        Raises:
+            ValueError: start が end より後の場合、または評価期間にデータがない場合。
+        """
+        return self._prepare(df.copy(), name, start, end)
+
+    def _prepare(
+        self,
+        df: pd.DataFrame,
+        name: str,
+        start: DateLike | None = None,
+        end: DateLike | None = None,
+    ) -> PreparedSignals:
         """
         prepare() の本体です。df を直接書き換えて、インジケーターの列を追加します。
 
         Args:
             df (pd.DataFrame): 株価データ。呼び出し元でコピーしたものを渡します。
             name (str): 警告に付ける名前（銘柄・パラメータなど）。
+            start (DateLike | None): 評価期間の開始日。None の場合は df の先頭から。
+            end (DateLike | None): 評価期間の終了日。None の場合は df の末尾まで。
 
         Returns:
-            PreparedSignals: from_signals に渡す価格・シグナル・SL/TP・サイズ。
+            PreparedSignals: 評価期間の、from_signals に渡す価格・シグナル・SL/TP・サイズ。
         """
         # ---------------------------------------------------------
         # 1. インジケーターの計算 (ベクトル演算で一括処理)
@@ -348,7 +441,6 @@ class Backtester:
         # ---------------------------------------------------------
         # サイズ計算にもDay TのSL%を渡す(shift(1)した配列を渡す)
         size = self.position_sizer.generate(df, sl_pct=sl_pct)
-        self._warn_capped_size(size, entries, name)
 
         # 100株単元の制約はエントリーの日だけにかける。
         # 単元を調整後の株数で表すと配当落ち・分割のたびに値が変わるため、
@@ -359,7 +451,7 @@ class Backtester:
         size_granularity = lot.where(entries)
         min_size = lot.where(entries, 0.0)
 
-        return PreparedSignals(
+        prepared = PreparedSignals(
             close=df["Close"],
             open=df["Open"],
             high=df["High"],
@@ -374,6 +466,48 @@ class Backtester:
             size_type=self.position_sizer.size_type,
             size_granularity=size_granularity,
             min_size=min_size,
+        )
+
+        # ---------------------------------------------------------
+        # 5. 評価期間の切り出し
+        # ---------------------------------------------------------
+        # シフトなどを全期間で済ませてから切り出す（切り出してからシフトすると、初日の情報が欠ける）
+        prepared = prepared.between(start, end)
+        if start is not None:
+            self._warn_short_warmup(df, prepared, name)
+        # 上限に達した件数は、評価期間のエントリーで数える
+        self._warn_capped_size(prepared.size, prepared.entries, name)
+        return prepared
+
+    def _warn_short_warmup(
+        self, df: pd.DataFrame, prepared: PreparedSignals, name: str
+    ) -> None:
+        """
+        評価期間の初日に、インジケーターの列や損切り幅がまだ計算できていない（NaN）場合に警告します。
+
+        評価期間の前のデータ（ウォームアップ期間）が短いと、評価期間の初めのうちはシグナルやサイズが出ず、
+        取引の機会が実際より少なくなります。
+
+        Args:
+            df (pd.DataFrame): インジケーターの列を追加した、全期間の株価データ。
+            prepared (PreparedSignals): 評価期間を切り出した入力。
+            name (str): 警告に付ける名前（銘柄・パラメータなど）。
+        """
+        first_day = prepared.close.index[0]
+        missing = [
+            col
+            for indicator in self.indicators
+            for col in indicator.output_columns
+            if pd.isna(df[col].loc[first_day])
+        ]
+        if self.sl is not None and pd.isna(prepared.sl_stop.iloc[0]):
+            missing.append("損切り幅")
+        if not missing:
+            return
+        prefix = f"[{name}] " if name else ""
+        logger.warning(
+            f"{prefix}評価期間の初日（{first_day}）に、まだ計算できていない値があります: "
+            f"{', '.join(missing)}。評価期間の前のデータ（ウォームアップ期間）を長くしてください。"
         )
 
     def _warn_capped_size(self, size: pd.Series, entries: pd.Series, name: str) -> None:
@@ -436,11 +570,20 @@ class Backtester:
         # vectorbt の cached_property を Pylance が関数と見なすため、このルールだけ無視する
         return portfolio.orders.records_readable  # pyright: ignore[reportFunctionMemberAccess]
 
-    def run(self, df: pd.DataFrame, name: str = "") -> vbt.Portfolio:
+    def run(
+        self,
+        df: pd.DataFrame,
+        name: str = "",
+        start: DateLike | None = None,
+        end: DateLike | None = None,
+    ) -> vbt.Portfolio:
         """
         バックテストを実行します。
 
         prepare() で作った入力を vectorbt に渡してシミュレーションします。
+        start / end を指定すると、評価期間 [start, end] だけをシミュレーションします。
+        口座は評価期間の初日に初期資金で始まるので、年率の指標やエクスポージャーも評価期間だけで計算されます。
+        評価期間より前の df の行は、インジケーターのウォームアップにだけ使います。
         エントリー当日に SL/TP ラインへ届く日は、足を2行に分けてから渡します（split_entry_day_bars）。
         そのため、Portfolio のインデックスには、元の日付に加えて該当日の 12:00 の行が入ります。
         エントリー注文の約定率が min_fill_rate を下回った場合は、警告を出します。
@@ -448,16 +591,21 @@ class Backtester:
         Args:
             df (pd.DataFrame): バックテストに使用する株価データ（書き換えません）。
             name (str): 警告に付ける名前（銘柄・パラメータなど）。
+            start (DateLike | None): 評価期間の開始日（その日を含む）。None の場合は df の先頭から。
+            end (DateLike | None): 評価期間の終了日（その日を含む）。None の場合は df の末尾まで。
 
         Returns:
             vbt.Portfolio: バックテスト結果を含む vectorbt の Portfolio オブジェクト。
+
+        Raises:
+            ValueError: start が end より後の場合、または評価期間にデータがない場合。
         """
         # 入力は書き換えず、インジケーターの列を追加したコピーを self.df に残す（チャートの出力で使う）
         df = df.copy()
-        prepared = self._prepare(df, name)
+        prepared = self._prepare(df, name, start, end)
 
-        # 状態を保持 (参照のみ)
-        self.df = df
+        # 状態を保持 (参照のみ)。チャートを Portfolio とそろえるため、評価期間の行だけを残す
+        self.df = df.loc[prepared.close.index]
         self.entries_series = prepared.entries
         self.exits_series = prepared.exits
 

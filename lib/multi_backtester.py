@@ -8,7 +8,7 @@ import pandas as pd
 import vectorbt as vbt
 
 from lib import data_loader as dl
-from lib.backtester import JP_MARKET_PARAMS, Backtester, PreparedSignals
+from lib.backtester import JP_MARKET_PARAMS, Backtester, DateLike, PreparedSignals
 from lib.data_sources import AbstractPriceSource
 from lib.metrics import (
     METRIC_COLUMNS,
@@ -101,7 +101,12 @@ class MultiBacktester:
         self.param_grid = param_grid
         self.param_sets = expand_param_grid(param_grid)
 
-    def run_independent(self, data: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    def run_independent(
+        self,
+        data: dict[str, pd.DataFrame],
+        start: DateLike | None = None,
+        end: DateLike | None = None,
+    ) -> pd.DataFrame:
         """
         銘柄 × パラメータの全組み合わせを、それぞれ独立した口座で実行します。
 
@@ -111,6 +116,9 @@ class MultiBacktester:
 
         Args:
             data (dict[str, pd.DataFrame]): ティッカーをキー、株価データを値とする辞書。
+            start (DateLike | None): 評価期間の開始日（その日を含む）。None の場合は各銘柄のデータの先頭から。
+                それより前のデータは、インジケーターのウォームアップにだけ使います（Backtester.run と同じ）。
+            end (DateLike | None): 評価期間の終了日（その日を含む）。None の場合は各銘柄のデータの末尾まで。
 
         Returns:
             pd.DataFrame: 1行1実行の結果。列は ticker、パラメータ名、METRIC_COLUMNS。
@@ -120,7 +128,9 @@ class MultiBacktester:
         for params in self.param_sets:
             for ticker, df in data.items():
                 backtester = self.factory(**params)
-                portfolio = backtester.run(df, name=f"{ticker} {params}")
+                portfolio = backtester.run(
+                    df, name=f"{ticker} {params}", start=start, end=end
+                )
                 rows.append({"ticker": ticker, **params, **calc_metrics(portfolio)})
         columns = ["ticker", *self._param_names(), *METRIC_COLUMNS]
         return pd.DataFrame(rows, columns=columns)
@@ -185,6 +195,8 @@ class MultiBacktester:
         data: dict[str, pd.DataFrame],
         params: dict[str, Any] | None = None,
         init_cash: float | None = None,
+        start: DateLike | None = None,
+        end: DateLike | None = None,
     ) -> vbt.Portfolio:
         """
         1つの口座（資金共有）で全銘柄を同時に運用するバックテストを実行します。
@@ -210,13 +222,17 @@ class MultiBacktester:
             params (dict[str, Any] | None): factory に渡すパラメータ。None の場合は引数なし。
             init_cash (float | None): 口座全体の初期資金。None の場合は factory が作る
                 Backtester の init_cash を使います。
+            start (DateLike | None): 評価期間の開始日（その日を含む）。None の場合は各銘柄のデータの先頭から。
+                それより前のデータは、インジケーターのウォームアップにだけ使います（Backtester.run と同じ）。
+            end (DateLike | None): 評価期間の終了日（その日を含む）。None の場合は各銘柄のデータの末尾まで。
 
         Returns:
             vbt.Portfolio: 全銘柄を1グループにまとめた Portfolio。
                 stats() は口座全体、trades / orders は銘柄（列）ごとに参照できます。
 
         Raises:
-            ValueError: data が空の場合、または銘柄間で size_type が異なる場合。
+            ValueError: data が空の場合、銘柄間で size_type が異なる場合、
+                または評価期間にデータがない銘柄がある場合。
         """
         if not data:
             raise ValueError("エラー: 銘柄データが空です。")
@@ -234,7 +250,7 @@ class MultiBacktester:
             min_fill_rate = backtester.min_fill_rate
             # エントリー当日の SL/TP 判定のための足の分割は、Backtester.run と同じく prepare の後に行う
             prepared[ticker] = backtester.prepare(
-                df, name=f"資金共有 {params} {ticker}"
+                df, name=f"資金共有 {params} {ticker}", start=start, end=end
             ).split_entry_day_bars(backtester.slippage)
 
         size_types = {p.size_type for p in prepared.values()}

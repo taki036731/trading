@@ -1,5 +1,3 @@
-import datetime
-
 import pandas_ta as ta  # noqa: F401
 
 from lib import data_loader as dl
@@ -15,8 +13,10 @@ from lib.strategies.signals import (
     ATRConditionSignal,
     DeadCrossSignal,
     GoldenCrossSignal,
-    InDateRangeSignal,
 )
+
+# 評価期間の開始日。データはインジケーターのウォームアップのために、これより前から取得する（#38）
+EVAL_START = "2016-06-25"
 
 if __name__ == "__main__":
     setup_logging()
@@ -27,9 +27,6 @@ if __name__ == "__main__":
         indicators=[MAIndicator("EMA", 5, 20), ATRIndicator(15)],
         entries=[
             GoldenCrossSignal(),
-            InDateRangeSignal(
-                datetime.datetime(2016, 6, 25), datetime.datetime(2030, 12, 31)
-            ),
             ATRConditionSignal(lower=1.5, upper=5),
         ],
         exits=[DeadCrossSignal()],
@@ -38,7 +35,7 @@ if __name__ == "__main__":
         position_sizer=RiskPercentageSizer(0.02),
     )
 
-    backtester.run(df)
+    backtester.run(df, start=EVAL_START)
     backtester.display_stats()
     backtester.save_orders_to_csv()
     backtester.save_chart_to_sheet()

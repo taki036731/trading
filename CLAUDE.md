@@ -89,13 +89,15 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 
 `run()` は `prepare(df)`(上記 1〜4 を行い、1銘柄分の入力を日次のまま `PreparedSignals` で返す。属性は全て `pd.Series`)と、足の分割、`from_signals` の呼び出しに分かれている。日本市場向けの固定条件は `JP_MARKET_PARAMS` にまとめてある(単元の制約は日ごとに変わるため `PreparedSignals` 側、取引コストは差し替えられるように `Backtester.cost_params` 側)。
 
+評価期間は `run(df, start=..., end=...)` / `prepare(df, start=..., end=...)` で指定する(両端を含む。省略時は `df` の全期間)。`prepare()` は 1〜4 を `df` の全期間で計算してから、評価期間の行を切り出す(`PreparedSignals.between`)。評価期間より前の行はインジケーターのウォームアップにだけ使い、口座は評価期間の初日に初期資金で始まるので、年率の指標やエクスポージャーも評価期間だけで計算される(vectorbt の単一銘柄の `Portfolio` は時間で切れず、切っても初期資金が合わないため、指標の側では切らない)。切り出しは必ずシフトの後・足の分割の前に行う(先に切ると、評価期間の初日の指標が NaN になる)。評価期間の初日にインジケーターの列や損切り幅が NaN なら、ウォームアップ不足を警告する。`run()` が残す `self.df` も評価期間の行だけになる。エントリーの期間を絞るだけなら `InDateRangeSignal` も使えるが、年率の指標に取引しない期間が入るため、評価には `start` / `end` を使う
+
 ### 複数銘柄・パラメータグリッド(`lib/multi_backtester.py`)
 
 `MultiBacktester(factory, param_grid)` は、パラメータを受け取って新しい `Backtester` を返す関数(factory)を使って、複数銘柄を一括で検証する。
 
-- `run_independent(data)`: 銘柄 × パラメータの全組み合わせを独立した口座で実行し、1行1実行の指標(`lib/metrics.py` の `calc_metrics`)の DataFrame を返す
+- `run_independent(data, start=None, end=None)`: 銘柄 × パラメータの全組み合わせを独立した口座で実行し、1行1実行の指標(`lib/metrics.py` の `calc_metrics`)の DataFrame を返す
 - `aggregate(summary)`: パラメータごとに銘柄横断の中央値・平均・プラス銘柄の割合を出す。取引0回の銘柄は中央値・平均・`positive_ratio` から除外し、件数を `zero_trade_tickers` に出す
-- `run_portfolio(data, params)`: 全銘柄を1つの口座(`cash_sharing=True`、`call_seq="auto"`)で運用する。銘柄ごとの `PreparedSignals` を(足を分割してから)`_combine()` で列=銘柄の DataFrame にまとめ、`from_signals` のキーワード引数(dict)として渡す(`PreparedSignals` には詰め直さない)。`SizeType.Percent` のサイザーは**現金残高**に対する割合になる。同じ日に買いが重なり現金が足りない場合は、**サイズの小さい順**に先着(`call_seq="auto"` が注文の大きさの順に処理するため)。サイズが同じなら `data` の銘柄の並び順で、サイザーの上限(`max_size`)に達した銘柄同士もこれになる
+- `run_portfolio(data, params, start=None, end=None)`: 全銘柄を1つの口座(`cash_sharing=True`、`call_seq="auto"`)で運用する。銘柄ごとの `PreparedSignals` を(足を分割してから)`_combine()` で列=銘柄の DataFrame にまとめ、`from_signals` のキーワード引数(dict)として渡す(`PreparedSignals` には詰め直さない)。`SizeType.Percent` のサイザーは**現金残高**に対する割合になる。同じ日に買いが重なり現金が足りない場合は、**サイズの小さい順**に先着(`call_seq="auto"` が注文の大きさの順に処理するため)。サイズが同じなら `data` の銘柄の並び順で、サイザーの上限(`max_size`)に達した銘柄同士もこれになる
 - `load_universe(tickers, start, end, source=None)`: `fetch_stock_data` を銘柄ごとに呼んで `{ticker: df}` を返す
 
 ### 戦略コンポーネント(`lib/strategies/`)
@@ -119,7 +121,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 ### エントリーポイント・テスト
 
 - `tools/strategy01_multi.py`: strategy01 を複数銘柄 × 小さなパラメータグリッドで回すサンプル(CSV のみ出力)
-- `tools/strategy01.py`: 基準となるサンプル。EMA 5/20 のゴールデン/デッドクロス、期間フィルター、ATR のボラティリティフィルター、ATR ベースの損切り/利確、リスク割合サイジングを組み合わせ、`7203.T`(トヨタ)に対して実行する。新しい戦略スクリプトを `tools/` に作るときのテンプレートとして使う
+- `tools/strategy01.py`: 基準となるサンプル。EMA 5/20 のゴールデン/デッドクロス、ATR のボラティリティフィルター、ATR ベースの損切り/利確、リスク割合サイジングを組み合わせ、`7203.T`(トヨタ)に対して実行する。データは2010年から取得し、評価期間は `EVAL_START`(2016-06-25)以降。新しい戦略スクリプトを `tools/` に作るときのテンプレートとして使う
 - `tests/helpers.py` の `create_base_df()`: 戦略のテスト用に、`short_ma` / `long_ma` / `atr` の列があらかじめ入った合成 OHLC の DataFrame を作る(indicator のステップを通さない)
 
 ## その他

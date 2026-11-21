@@ -3,6 +3,8 @@ from typing import ClassVar
 
 import pandas as pd
 
+from lib.validation import validate_required_columns
+
 
 class AbstractSignal(ABC):
     """
@@ -68,9 +70,7 @@ class AbstractSignal(ABC):
         Raises:
             ValueError: 必須カラムが不足している場合。
         """
-        for col in self.required_columns:
-            if col not in df.columns:
-                raise ValueError(f"エラー: 必須カラム'{col}'が存在しません。")
+        validate_required_columns(df, self.required_columns, self)
         signal = self._calculate(df).fillna(False).astype(bool)
         if self.shift_required:
             signal = signal.shift(1, fill_value=False)

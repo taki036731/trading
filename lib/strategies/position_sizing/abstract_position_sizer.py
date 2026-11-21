@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 import pandas as pd
 from vectorbt.portfolio.enums import SizeType
 
+from lib.validation import validate_required_columns
+
 
 class AbstractPositionSizer(ABC):
     """
@@ -74,9 +76,7 @@ class AbstractPositionSizer(ABC):
         Raises:
             ValueError: 必須カラムが不足している場合。
         """
-        for col in self.required_columns:
-            if col not in df.columns:
-                raise ValueError(f"エラー: 必須カラム'{col}'が存在しません。")
+        validate_required_columns(df, self.required_columns, self)
 
         size = self._calculate(df, **kwargs)
         if self.max_size is not None:

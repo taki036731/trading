@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 
 import pandas as pd
 
+from lib.validation import validate_required_columns
+
 
 class AbstractStopLoss(ABC):
     """
@@ -51,7 +53,5 @@ class AbstractStopLoss(ABC):
         Returns:
             pd.Series: vectorbtの `sl_stop` などに渡すための数値Series（通常は比率）。
         """
-        for col in self.required_columns:
-            if col not in df.columns:
-                raise ValueError(f"エラー: 必須カラム'{col}'が存在しません。")
+        validate_required_columns(df, self.required_columns, self)
         return self._calculate(df)

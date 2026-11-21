@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 
 import pandas as pd
 
+from lib.validation import validate_required_columns
+
 
 class AbstractPriceSource(ABC):
     """
@@ -67,7 +69,5 @@ class AbstractPriceSource(ABC):
         if df.empty:
             return df
 
-        for col in self.required_columns:
-            if col not in df.columns:
-                raise ValueError(f"エラー: 必須カラム'{col}'が存在しません。")
+        validate_required_columns(df, self.required_columns, self)
         return df

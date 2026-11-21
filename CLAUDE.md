@@ -100,7 +100,7 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 
 ### 戦略コンポーネント(`lib/strategies/`)
 
-全てのコンポーネントは同じテンプレートメソッドパターンで作られている。`AbstractX` 基底クラスが `required_columns`(抽象プロパティ)と `_calculate()`(抽象メソッド)を定義し、公開メソッドの `generate()` が必要な列の存在を検証してから `_calculate()` に処理を渡す。
+全てのコンポーネントは同じテンプレートメソッドパターンで作られている。`AbstractX` 基底クラスが `required_columns`(抽象プロパティ)と `_calculate()`(抽象メソッド)を定義し、公開メソッドの `generate()` が必要な列の存在を検証してから `_calculate()` に処理を渡す。列の検証は `lib/validation.py` の `validate_required_columns()` に共通化してあり(`AbstractPriceSource.fetch()` も同じ)、不足している列をクラス名つきでまとめて表示する。新しい基底クラスでも、ループを書かずにこれを使う。
 新しい indicator / signal / exit / sizer を追加するときは、該当サブフォルダの抽象クラスを継承し、そのサブフォルダの `__init__.py` からエクスポートすること。
 
 - `indicators/`(`AbstractIndicator`): 株価の DataFrame に列を追加する。例: `MAIndicator` は `pandas_ta` で `short_ma` / `long_ma` を、`ATRIndicator` は `atr` を追加する

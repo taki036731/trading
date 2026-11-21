@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 
 import pandas as pd
 
+from lib.validation import validate_required_columns
+
 
 class AbstractIndicator(ABC):
     """
@@ -54,7 +56,5 @@ class AbstractIndicator(ABC):
         Raises:
             ValueError: 必須カラムがデータフレームに含まれていない場合。
         """
-        for col in self.required_columns:
-            if col not in df.columns:
-                raise ValueError(f"エラー: 必須カラム'{col}'が存在しません。")
+        validate_required_columns(df, self.required_columns, self)
         return self._calculate(df)

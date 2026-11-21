@@ -9,11 +9,17 @@ class GoldenCrossSignal(AbstractSignal):
     ゴールデンクロス（短期移動平均が長期移動平均を下から上に突き抜ける）を判定するシグナル。
     """
 
-    def __init__(self):
+    def __init__(self, short_col: str = "short_ma", long_col: str = "long_ma"):
         """
         GoldenCrossSignal を初期化します。
+
+        Args:
+            short_col (str): 短期移動平均のカラム名。デフォルトは "short_ma"。
+            long_col (str): 長期移動平均のカラム名。デフォルトは "long_ma"。
         """
-        super().__init__()
+        super().__init__(short_col=short_col, long_col=long_col)
+        self.short_col = short_col
+        self.long_col = long_col
 
     @property
     def required_columns(self) -> list[str]:
@@ -21,20 +27,20 @@ class GoldenCrossSignal(AbstractSignal):
         計算に必須なカラムを返します。
 
         Returns:
-            list[str]: ["short_ma", "long_ma"]
+            list[str]: [short_col, long_col]
         """
-        return ["short_ma", "long_ma"]
+        return [self.short_col, self.long_col]
 
     def _calculate(self, df: pd.DataFrame) -> pd.Series:
         """
         ゴールデンクロスを判定します。
 
         Args:
-            df (pd.DataFrame): 'short_ma' と 'long_ma' カラムを含むデータフレーム。
+            df (pd.DataFrame): short_col と long_col のカラムを含むデータフレーム。
 
         Returns:
             pd.Series: ゴールデンクロスが発生した時点でTrueとなるブール値Series。
         """
-        return (df["short_ma"] > df["long_ma"]) & (
-            df["short_ma"].shift(1) <= df["long_ma"].shift(1)
-        )
+        short_ma = df[self.short_col]
+        long_ma = df[self.long_col]
+        return (short_ma > long_ma) & (short_ma.shift(1) <= long_ma.shift(1))

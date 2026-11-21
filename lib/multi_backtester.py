@@ -120,7 +120,7 @@ class MultiBacktester:
         for params in self.param_sets:
             for ticker, df in data.items():
                 backtester = self.factory(**params)
-                portfolio = backtester.run(df.copy(), name=f"{ticker} {params}")
+                portfolio = backtester.run(df, name=f"{ticker} {params}")
                 rows.append({"ticker": ticker, **params, **calc_metrics(portfolio)})
         columns = ["ticker", *self._param_names(), *METRIC_COLUMNS]
         return pd.DataFrame(rows, columns=columns)
@@ -234,7 +234,7 @@ class MultiBacktester:
             min_fill_rate = backtester.min_fill_rate
             # エントリー当日の SL/TP 判定のための足の分割は、Backtester.run と同じく prepare の後に行う
             prepared[ticker] = backtester.prepare(
-                df.copy(), name=f"資金共有 {params} {ticker}"
+                df, name=f"資金共有 {params} {ticker}"
             ).split_entry_day_bars(backtester.slippage)
 
         size_types = {p.size_type for p in prepared.values()}

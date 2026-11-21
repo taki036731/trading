@@ -43,6 +43,17 @@ class AbstractIndicator(ABC):
             list[str]: 必須カラム名のリスト。
         """
 
+    @property
+    @abstractmethod
+    def output_columns(self) -> list[str]:
+        """
+        インジケータが追加するカラム名のリストを定義します。
+        同じ種類のインジケータを複数使うときは、コンストラクタの引数で別の名前を指定します。
+
+        Returns:
+            list[str]: 追加するカラム名のリスト。
+        """
+
     def generate(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         入力データのバリデーションを行った後、インジケータの計算を実行します。
@@ -55,6 +66,14 @@ class AbstractIndicator(ABC):
 
         Raises:
             ValueError: 必須カラムがデータフレームに含まれていない場合。
+                または、追加するカラムが既にデータフレームに存在する場合（黙って上書きしないため）。
         """
         validate_required_columns(df, self.required_columns, self)
+        existing = [col for col in self.output_columns if col in df.columns]
+        if existing:
+            names = ", ".join(f"'{col}'" for col in existing)
+            raise ValueError(
+                f"エラー: {type(self).__name__} が追加するカラム {names} は既に存在します。"
+                "同じ種類のインジケータを複数使う場合は、出力するカラム名を変えてください。"
+            )
         return self._calculate(df)

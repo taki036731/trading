@@ -175,6 +175,28 @@ class PreparedSignals:
         )
 
 
+def _check_duplicate_output_columns(indicators: list[AbstractIndicator]) -> None:
+    """
+    複数のインジケーターが同じ名前のカラムを出力しないかを検証します。
+    データを読む前（Backtester の初期化時）に気付けるようにするためのものです。
+
+    Args:
+        indicators (list[AbstractIndicator]): 検証するインジケーター。
+
+    Raises:
+        ValueError: 同じ名前のカラムを出力するインジケーターが複数ある場合。
+    """
+    owners: dict[str, AbstractIndicator] = {}
+    for indicator in indicators:
+        for col in indicator.output_columns:
+            if col in owners:
+                raise ValueError(
+                    f"エラー: {type(owners[col]).__name__} と {type(indicator).__name__} が、"
+                    f"同じカラム '{col}' を出力します。出力するカラム名を変えてください。"
+                )
+            owners[col] = indicator
+
+
 class Backtester:
     """
     売買戦略のバックテストを実行・管理するクラス。
@@ -215,11 +237,13 @@ class Backtester:
 
         Raises:
             ValueError: 損切り幅を必要とするサイザー（requires_sl_pct=True）に、sl=None を組み合わせた場合。
+                または、複数のインジケーターが同じ名前のカラムを出力する場合。
         """
         if sl is None and position_sizer.requires_sl_pct:
             raise ValueError(
                 f"{type(position_sizer).__name__} は損切り幅を使うため、sl を省略できません。"
             )
+        _check_duplicate_output_columns(indicators)
         self.indicators = indicators
         self.entries = entries
         self.exits = exits
@@ -266,6 +290,7 @@ class Backtester:
     def prepare(self, df: pd.DataFrame, name: str = "") -> PreparedSignals:
         """
         シミュレーションの直前までの処理を行い、vectorbt に渡す入力をまとめて返します。
+        入力の df は書き換えず、コピーにインジケーターの列を追加して使います。
 
         1. インジケーターの計算
         2. 動的な利確・損切り幅の算出（翌日約定用に1日シフト）
@@ -276,7 +301,20 @@ class Backtester:
         サイズがサイザーの上限（max_size）に達したエントリーがあれば、件数を警告します。
 
         Args:
-            df (pd.DataFrame): バックテストに使用する株価データ（インジケーターの列が追加されます）。
+            df (pd.DataFrame): バックテストに使用する株価データ（書き換えません）。
+            name (str): 警告に付ける名前（銘柄・パラメータなど）。
+
+        Returns:
+            PreparedSignals: from_signals に渡す価格・シグナル・SL/TP・サイズ。
+        """
+        return self._prepare(df.copy(), name)
+
+    def _prepare(self, df: pd.DataFrame, name: str) -> PreparedSignals:
+        """
+        prepare() の本体です。df を直接書き換えて、インジケーターの列を追加します。
+
+        Args:
+            df (pd.DataFrame): 株価データ。呼び出し元でコピーしたものを渡します。
             name (str): 警告に付ける名前（銘柄・パラメータなど）。
 
         Returns:
@@ -408,13 +446,15 @@ class Backtester:
         エントリー注文の約定率が min_fill_rate を下回った場合は、警告を出します。
 
         Args:
-            df (pd.DataFrame): バックテストに使用する株価データ。
+            df (pd.DataFrame): バックテストに使用する株価データ（書き換えません）。
             name (str): 警告に付ける名前（銘柄・パラメータなど）。
 
         Returns:
             vbt.Portfolio: バックテスト結果を含む vectorbt の Portfolio オブジェクト。
         """
-        prepared = self.prepare(df, name=name)
+        # 入力は書き換えず、インジケーターの列を追加したコピーを self.df に残す（チャートの出力で使う）
+        df = df.copy()
+        prepared = self._prepare(df, name)
 
         # 状態を保持 (参照のみ)
         self.df = df

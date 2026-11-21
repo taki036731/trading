@@ -211,7 +211,8 @@ def test_aggregate_excludes_zero_trade_tickers():
     data = {
         "AAA": create_random_walk_df(seed=1),
         "BBB": create_random_walk_df(seed=2),
-        "ZERO": create_base_df(days=300),  # クロスが起きず、取引が0回
+        # クロスが起きず、取引が0回。指標はインジケーターで計算するので、あらかじめ入っている列は除く
+        "ZERO": create_base_df(days=300).drop(columns=["short_ma", "long_ma", "atr"]),
     }
     mb = MultiBacktester(build_random_walk_strategy)
     summary = mb.run_independent(data)

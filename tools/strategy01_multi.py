@@ -1,4 +1,3 @@
-import datetime
 import logging
 
 import pandas as pd
@@ -18,7 +17,6 @@ from lib.strategies.signals import (
     ATRConditionSignal,
     DeadCrossSignal,
     GoldenCrossSignal,
-    InDateRangeSignal,
 )
 
 # python -m で実行すると __name__ が "__main__" になるため、tools のロガー設定が効く名前を固定で付ける
@@ -33,6 +31,9 @@ PARAM_GRID = {
     "long": [20, 50],
     "tp_mult": [3, 4],
 }
+
+# 評価期間の開始日。データはインジケーターのウォームアップのために、これより前から取得する（#38）
+EVAL_START = "2016-06-25"
 
 # 初期資金（独立モードの各口座と、資金共有モードの口座全体に共通）
 # Backtester の既定値（100万円）では、1単元に届かずに捨てられるエントリー注文が多く、
@@ -56,9 +57,6 @@ def build_strategy(short: int = 5, long: int = 20, tp_mult: float = 4) -> Backte
         indicators=[MAIndicator("EMA", short, long), ATRIndicator(15)],
         entries=[
             GoldenCrossSignal(),
-            InDateRangeSignal(
-                datetime.datetime(2016, 6, 25), datetime.datetime(2030, 12, 31)
-            ),
             ATRConditionSignal(lower=1.5, upper=5),
         ],
         exits=[DeadCrossSignal()],
@@ -112,7 +110,7 @@ if __name__ == "__main__":
         logger.warning(f"[{ticker}] 期間中に1単元の金額が初期資金を超えています。")
 
     # 1. 銘柄 × パラメータごとに独立して実行
-    summary = mb.run_independent(data)
+    summary = mb.run_independent(data, start=EVAL_START)
     summary.to_csv("multi_summary.csv", index=False)
 
     # 2. パラメータごとに銘柄横断で集計（多くの銘柄で安定しているかを見る）
@@ -122,7 +120,9 @@ if __name__ == "__main__":
     print(by_params.sort_values("sharpe_median", ascending=False))
 
     # 3. 資金共有モード（strategy01 と同じパラメータで、全銘柄を1つの口座で運用）
-    portfolio = mb.run_portfolio(data, params={"short": 5, "long": 20, "tp_mult": 4})
+    portfolio = mb.run_portfolio(
+        data, params={"short": 5, "long": 20, "tp_mult": 4}, start=EVAL_START
+    )
     print("-" * 40)
     print("【資金共有モードの結果サマリ】")
     print(portfolio_stats(portfolio))

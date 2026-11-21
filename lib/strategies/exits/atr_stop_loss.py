@@ -9,24 +9,26 @@ class AtrStopLoss(AbstractStopLoss):
     ATR（平均真の範囲）に基づいた損切り価格を計算するクラス。
     """
 
-    def __init__(self, percent: float, is_trailing: bool = False):
+    def __init__(self, percent: float, is_trailing: bool = False, atr_col: str = "atr"):
         """
         AtrStopLoss を初期化します。
 
         Args:
             percent (float): ATRに乗ずる係数（例: 2.0 なら ATRの2倍の幅で損切り）。
             is_trailing (bool): トレイリングストップとして扱う場合は True。
+            atr_col (str): ATR のカラム名。デフォルトは "atr"。
         """
-        super().__init__(is_trailing, percent=percent)
+        super().__init__(is_trailing, percent=percent, atr_col=atr_col)
         self.percent = percent
+        self.atr_col = atr_col
 
     @property
     def required_columns(self) -> list[str]:
         """
         Returns:
-            list[str]: ["atr", "Close"]
+            list[str]: [atr_col, "Close"]
         """
-        return ["atr", "Close"]
+        return [self.atr_col, "Close"]
 
     def _calculate(self, df: DataFrame) -> Series:
         """
@@ -35,4 +37,4 @@ class AtrStopLoss(AbstractStopLoss):
         Returns:
             Series: (atr * percent) / Close
         """
-        return (df["atr"] * self.percent) / df["Close"]
+        return (df[self.atr_col] * self.percent) / df["Close"]

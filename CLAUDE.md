@@ -35,7 +35,7 @@ pytest tests/test_strategy.py::test_golden_cross_and_take_profit
 python -m tools.strategy01
 ```
 
-型チェック(Pylance と同じ判定。設定は `pyrightconfig.json` の `standard` モードで、対象は `lib/` / `tools/` / `tests/`。古い `tools/fetch_prices.py` と `sample/` は対象外):
+型チェック(Pylance と同じ判定。設定は `pyrightconfig.json` の `standard` モードで、対象は `lib/` / `tools/` / `tests/`):
 ```bash
 npx -y pyright@1.1.408
 ```
@@ -120,7 +120,6 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 
 - `tools/strategy01_multi.py`: strategy01 を複数銘柄 × 小さなパラメータグリッドで回すサンプル(CSV のみ出力)
 - `tools/strategy01.py`: 基準となるサンプル。EMA 5/20 のゴールデン/デッドクロス、期間フィルター、ATR のボラティリティフィルター、ATR ベースの損切り/利確、リスク割合サイジングを組み合わせ、`7203.T`(トヨタ)に対して実行する。新しい戦略スクリプトを `tools/` に作るときのテンプレートとして使う
-- `tools/fetch_prices.py` / `sample/from_pine.py`: 古いスクリプト。`lib/data_loader.py` に存在しない関数(例: `dl.add_sma`)を参照している可能性があるため、最新の実装として扱わない
 - `tests/helpers.py` の `create_base_df()`: 戦略のテスト用に、`short_ma` / `long_ma` / `atr` の列があらかじめ入った合成 OHLC の DataFrame を作る(indicator のステップを通さない)
 
 ## その他

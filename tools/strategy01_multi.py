@@ -34,6 +34,11 @@ PARAM_GRID = {
     "tp_mult": [3, 4],
 }
 
+# 初期資金（独立モードの各口座と、資金共有モードの口座全体に共通）
+# Backtester の既定値（100万円）では、1単元に届かずに捨てられるエントリー注文が多く、
+# 戦略の差ではなく「注文が通ったか」の差が結果に出ていたため、1,000万円にしている（#49）
+INIT_CASH = 10_000_000.0
+
 
 def build_strategy(short: int = 5, long: int = 20, tp_mult: float = 4) -> Backtester:
     """
@@ -60,6 +65,7 @@ def build_strategy(short: int = 5, long: int = 20, tp_mult: float = 4) -> Backte
         tp=AtrTakeProfit(tp_mult),
         sl=AtrStopLoss(2),
         position_sizer=RiskPercentageSizer(0.02),
+        init_cash=INIT_CASH,
     )
 
 

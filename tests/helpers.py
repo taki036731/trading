@@ -47,3 +47,39 @@ def create_random_walk_df(
     return pd.DataFrame(
         {"Open": open_, "High": high, "Low": low, "Close": close}, index=dates
     )
+
+
+def daily_close_value(portfolio) -> pd.Series:
+    """
+    Portfolio の資産推移を、日付ごとの最後の行（その日の終値時点）にそろえて返す。
+
+    足を分けた 12:00 の行の有無や、1行目（始値の時点）の評価額の違いに左右されずに、
+    分け方の異なる Portfolio の資産推移を比べるために使う。
+    """
+    value = portfolio.value()
+    index = pd.DatetimeIndex(value.index)
+    return value.groupby(index.normalize()).last()
+
+
+def assert_same_daily_result(actual, expected) -> None:
+    """
+    2つの Portfolio の、日付ごとの終値時点の資産推移とトレードが一致することを確かめる。
+
+    資金共有モード（MultiBacktester.run_portfolio）は、買いのある日を全て2行に分けるため、
+    1銘柄だけでも Backtester.run と行数や始値の時点の評価額が変わる。売買の結果が同じことは、これで比べる。
+    """
+    np.testing.assert_allclose(
+        daily_close_value(actual).to_numpy().ravel(), daily_close_value(expected).to_numpy().ravel()
+    )
+    columns = ["Size", "Avg Entry Price", "Avg Exit Price", "PnL", "Status"]
+    actual_trades = actual.trades.records_readable
+    expected_trades = expected.trades.records_readable
+    pd.testing.assert_frame_equal(
+        actual_trades[columns].reset_index(drop=True),
+        expected_trades[columns].reset_index(drop=True),
+    )
+    for col in ["Entry Timestamp", "Exit Timestamp"]:
+        assert (
+            pd.to_datetime(actual_trades[col]).dt.normalize().tolist()
+            == pd.to_datetime(expected_trades[col]).dt.normalize().tolist()
+        )

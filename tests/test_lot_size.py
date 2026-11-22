@@ -9,7 +9,7 @@ from lib.strategies.exits import AtrStopLoss, AtrTakeProfit
 from lib.strategies.position_sizing import RiskPercentageSizer
 from lib.strategies.signals import DeadCrossSignal, GoldenCrossSignal
 
-from .helpers import create_base_df
+from .helpers import assert_same_daily_result, create_base_df
 
 
 def build_strategy(init_cash: float = 1000000.0) -> Backtester:
@@ -109,5 +109,5 @@ def test_run_portfolio_uses_real_unit():
         {"AAA": df}
     )
 
-    np.testing.assert_allclose(actual.value().values, expected.value().values)
+    assert_same_daily_result(actual, expected)
     assert actual.trades.records["size"][0] == 500

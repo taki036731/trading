@@ -209,26 +209,74 @@ class PreparedSignals:
             (sl_on & (self.sl_trail | (self.low <= fill * (1 - self.sl_stop))))
             | (self.tp_stop.notna() & (self.high >= fill * (1 + self.tp_stop)))
         )
-        if not touched.any():
+        return self._split_bars(touched, first_bar_price=self.open)
+
+    def split_bars_for_cash_sharing(self, days: pd.DatetimeIndex) -> "PreparedSignals":
+        """
+        資金共有モード用に、days の日の足を2行に分けたものを返します。
+
+        資金共有（cash_sharing=True、call_seq="auto"）では、同じ行の中で売りを買いより先に処理するため、
+        場中の SL/TP の決済の代金が、同じ日の始値の買いに使われてしまいます（未来の情報の混入）。
+        そこで、どれかの銘柄に買い（エントリーシグナル）がある日は、全銘柄の足を次の2行に分けます。
+
+        - 1行目（元の日時）: 前日の終値だけの足（O=H=L=C=前日終値）。エントリーとシグナルの売りは
+          price（始値）でここで約定する。保有中のポジションの SL/TP は、ここでは発動しない
+          （前日の終値がラインを越えていれば、前日のうちに決済されているため）
+        - 2行目（元の日時 + SPLIT_BAR_OFFSET）: 当日の実際の OHLC。SL/TP はここで判定する。
+          寄り付きのギャップでラインを越えた場合も、ここで始値で決済される
+
+        SL/TP の決済の代金は全て2行目で入るため、使えるのは翌日の買いからです。
+        シグナルの売り（始値で約定）の代金は、1行目で同じ日の始値の買いに使えます。
+        1行目に前日の終値を使うので、トレーリングの最高値も分けない日と同じように更新されます。
+        split_entry_day_bars で分ける日（エントリー当日に SL/TP ラインへ届く日）は、
+        エントリーのある日に含まれるので、こちらだけを使います。
+
+        Args:
+            days (pd.DatetimeIndex): 足を分ける日（全銘柄のエントリーのある日の和集合）。
+                この銘柄のデータにない日は無視します。
+
+        Returns:
+            PreparedSignals: 該当日を分割した入力。該当日がなければ self をそのまま返します。
+        """
+        mask = pd.Series(self.open.index.isin(days), index=self.open.index)
+        # 先頭の行（前日がない）は始値で代用する。ポジションがないので SL/TP の判定には影響しない
+        prev_close = self.close.shift(1).fillna(self.open)
+        return self._split_bars(mask, first_bar_price=prev_close)
+
+    def _split_bars(self, mask: pd.Series, first_bar_price: pd.Series) -> "PreparedSignals":
+        """
+        mask が True の日の足を2行に分けます。
+
+        1行目（元の日時）は first_bar_price だけの足（O=H=L=C）で、シフト済みのシグナル・SL/TP 幅・サイズを
+        そのまま残します。2行目（元の日時 + SPLIT_BAR_OFFSET）は当日の実際の OHLC で、シグナルは出しません。
+
+        Args:
+            mask (pd.Series): 足を分ける日を True とする bool の Series（インデックスは self と同じ）。
+            first_bar_price (pd.Series): 1行目の足の価格。
+
+        Returns:
+            PreparedSignals: 該当日を分割した入力。該当日がなければ self をそのまま返します。
+        """
+        if not mask.any():
             return self
 
-        days = cast(pd.DatetimeIndex, self.open.index)[touched.to_numpy()]
+        days = cast(pd.DatetimeIndex, self.open.index)[mask.to_numpy()]
         # 元のインデックスと日時の単位（ms など）をそろえる
         rest_index = (days + SPLIT_BAR_OFFSET).as_unit(days.unit)
 
         def _split(first: pd.Series, rest: pd.Series) -> pd.Series:
             """元の行（first）に、該当日の2行目（rest の値）を差し込みます。"""
-            return pd.concat([first, rest[touched].set_axis(rest_index)]).sort_index()
+            return pd.concat([first, rest[mask].set_axis(rest_index)]).sort_index()
 
         index = self.open.index
         no_signal = pd.Series(False, index=index)
-        flat = touched.to_numpy()  # 1行目を始値だけの足にする日
+        flat = mask.to_numpy()  # 1行目を first_bar_price だけの足にする日
 
         return PreparedSignals(
-            close=_split(self.close.mask(flat, self.open), self.close),
-            open=_split(self.open, self.open),
-            high=_split(self.high.mask(flat, self.open), self.high),
-            low=_split(self.low.mask(flat, self.open), self.low),
+            close=_split(self.close.mask(flat, first_bar_price), self.close),
+            open=_split(self.open.mask(flat, first_bar_price), self.open),
+            high=_split(self.high.mask(flat, first_bar_price), self.high),
+            low=_split(self.low.mask(flat, first_bar_price), self.low),
             price=_split(self.price, self.open),
             entries=_split(self.entries, no_signal),
             exits=_split(self.exits, no_signal),

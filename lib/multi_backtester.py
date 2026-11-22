@@ -207,7 +207,11 @@ class MultiBacktester:
 
         - 各銘柄で Backtester.prepare を実行し（シフトの扱いは単一銘柄と同じ）、
           列=銘柄の DataFrame にまとめて from_signals を1回呼びます
-        - call_seq="auto" により、同じ日は売りを先に処理してから買いを処理します
+        - call_seq="auto" により、同じ日は売りを先に処理してから買いを処理します。
+          ただし SL/TP の決済の代金は、翌日の買いから使えます（寄り付きのギャップでの決済も含む）。
+          どれかの銘柄に買いがある日は、全銘柄の足を「前日終値だけの足（エントリーとシグナルの売りが始値で約定）」と
+          「当日の足（12:00 の行。SL/TP を判定）」の2行に分けるためです（PreparedSignals.split_bars_for_cash_sharing）。
+          シグナルの売り（始値で約定）の代金は、同じ日の始値の買いに使えます
         - 同じ日に複数銘柄で買いシグナルが出て現金が足りない場合は、サイズの小さい順に先着になります
           （call_seq="auto" は注文の大きさの順に処理するため）。サイズが同じなら data の銘柄の並び順です。
           サイザーの上限（max_size）に達した銘柄同士は同じサイズになるため、data の並び順になります
@@ -218,8 +222,9 @@ class MultiBacktester:
         - 手数料・スリッページ・約定率の警告のしきい値（min_fill_rate）は、factory が作る Backtester の値を使います
         - エントリー注文の約定率が低い銘柄は警告します。資金共有では、1単元に届かない注文に加えて、
           現金が足りない注文（NoCashLong など）も捨てられます
-        - エントリー当日に SL/TP ラインへ届く日は、銘柄ごとに足を2行に分けます（split_entry_day_bars）。
-          他の銘柄の2行目は、値動きのない足（データのない日と同じ扱い）になります
+        - 上の足の分割は、エントリー当日の SL/TP の判定（Backtester.run の split_entry_day_bars）も兼ねます。
+          そのため、Portfolio のインデックスには、買いのある日の 12:00 の行が入ります。
+          データのない銘柄の2行目は、値動きのない足（データのない日と同じ扱い）になります
 
         Args:
             data (dict[str, pd.DataFrame]): ティッカーをキー、株価データを値とする辞書。
@@ -252,10 +257,19 @@ class MultiBacktester:
                 cash = backtester.init_cash
             cost_params = backtester.cost_params
             min_fill_rate = backtester.min_fill_rate
-            # エントリー当日の SL/TP 判定のための足の分割は、Backtester.run と同じく prepare の後に行う
             prepared[ticker] = backtester.prepare(
                 df, name=f"資金共有 {params} {ticker}", start=start, end=end
-            ).split_entry_day_bars(backtester.slippage)
+            )
+
+        # どれかの銘柄に買いがある日は、全銘柄の足を「前日終値の足」と「当日の足」に分け、
+        # 場中の SL/TP の決済の代金が、同じ日の始値の買いに使われないようにする。
+        # シフト済みの値は元の行に残すので、分割は Backtester.run と同じく prepare の後に行う
+        entry_days = pd.DatetimeIndex(
+            sorted(set().union(*(p.entries.index[p.entries.to_numpy()] for p in prepared.values())))
+        )
+        prepared = {
+            ticker: p.split_bars_for_cash_sharing(entry_days) for ticker, p in prepared.items()
+        }
 
         size_types = {p.size_type for p in prepared.values()}
         if len(size_types) != 1:

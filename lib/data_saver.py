@@ -42,6 +42,19 @@ def _initialize():
         _logger.info("接続が完了しました。")
 
 
+def is_configured() -> bool:
+    """
+    スプレッドシートへの出力先（環境変数 SPREADSHEET_ID）が設定されているかを返します。
+
+    接続はしないので、認証情報が正しいかまでは確かめません。
+
+    Returns:
+        bool: SPREADSHEET_ID が設定されていれば True。
+    """
+    load_dotenv()
+    return bool(os.getenv("SPREADSHEET_ID"))
+
+
 def write_df_to_sheet(sheet_name: str, df: pd.DataFrame, include_index: bool = False):
     """
     指定されたシート名に Pandas DataFrame を書き込みます。

@@ -43,6 +43,12 @@ EVAL_START = "2016-06-25"
 # 戦略の差ではなく「注文が通ったか」の差が結果に出ていたため、1,000万円にしている（#49）
 INIT_CASH = 10_000_000.0
 
+# 結果を Google スプレッドシートにも出力するか（#64）。CSV は常に出力する
+# 出力先は .env の SPREADSHEET_ID / CREDENTIALS_FILE。未設定なら警告してシートへの出力だけを飛ばす
+# strategy01 のシート（Chart / Orders / Trades）を上書きしないように、シート名に接頭辞を付ける
+SAVE_TO_SHEET = True
+SHEET_PREFIX = "Multi_"
+
 
 def build_strategy(short: int = 5, long: int = 20, tp_mult: float = 4) -> Backtester:
     """
@@ -119,11 +125,14 @@ if __name__ == "__main__":
     summary = attach_attributes(mb.run_independent(data, start=EVAL_START), universe)
     summary.insert(0, "universe", UNIVERSE_NAME)
     summary.to_csv("multi_summary.csv", index=False)
+    # スプレッドシートに出力する表（シート名の接頭辞を除いた名前 -> 表）
+    sheet_tables: dict[str, pd.DataFrame] = {"Summary": summary}
 
     # 2. パラメータごとに銘柄横断で集計（多くの銘柄で安定しているかを見る）
     by_params = mb.aggregate(summary)
     by_params.insert(0, "universe", UNIVERSE_NAME)
     by_params.to_csv("multi_by_params.csv", index=False)
+    sheet_tables["ByParams"] = by_params
     print("【パラメータごとの銘柄横断集計】")
     print(by_params.sort_values("sharpe_median", ascending=False))
 
@@ -132,6 +141,7 @@ if __name__ == "__main__":
         by_attr = mb.aggregate(summary, by=[col])
         by_attr.insert(0, "universe", UNIVERSE_NAME)
         by_attr.to_csv(f"multi_by_{col}.csv", index=False)
+        sheet_tables[f"By{col.capitalize()}"] = by_attr
     print("【パラメータ × 規模区分の集計（sharpe_median）】")
     print(
         mb.aggregate(summary, by=["size"])
@@ -145,3 +155,15 @@ if __name__ == "__main__":
     print("【資金共有モードの結果】")
     report.print_summary(portfolio)
     report.save_trades_csv(portfolio, "multi_portfolio_trades.csv")
+
+    # 4. スプレッドシートへの出力（実行するたびに同じシートを上書きする）
+    if not SAVE_TO_SHEET:
+        pass
+    elif not report.sheet_is_configured():
+        logger.warning(
+            "SPREADSHEET_ID が設定されていないため、スプレッドシートへの出力を飛ばしました（CSV は出力済み）。"
+        )
+    else:
+        for name, table in sheet_tables.items():
+            report.save_table_to_sheet(table, f"{SHEET_PREFIX}{name}")
+        report.save_trades_to_sheet(portfolio, sheet_name=f"{SHEET_PREFIX}PortfolioTrades")

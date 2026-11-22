@@ -11,6 +11,7 @@ Google Sheets への書き込みは lib.data_saver（gspread）に依存しま�
 
 import logging
 
+import numpy as np
 import pandas as pd
 import vectorbt as vbt
 
@@ -223,6 +224,42 @@ def save_trades_to_sheet(portfolio: vbt.Portfolio, sheet_name: str = "Trades") -
 
     ds.write_df_to_sheet(sheet_name, trades_table(portfolio), include_index=False)
     logger.info(f"取引履歴を '{sheet_name}' シートに保存しました。")
+
+
+def save_table_to_sheet(
+    df: pd.DataFrame, sheet_name: str, include_index: bool = False
+) -> None:
+    """
+    任意の表（一括検証の指標や集計など）を、スプレッドシートに保存します。
+
+    シートは毎回全て消してから書き込みます（過去の結果は残りません）。
+    NaN と ±inf は空欄にします。inf は Sheets API の JSON に書けず、書き込みが失敗するためです
+    （profit_factor は負けトレードがないと inf になる）。
+
+    Args:
+        df (pd.DataFrame): 保存する表。
+        sheet_name (str): 保存先のシート名。
+        include_index (bool): インデックスも書き込むかどうか。デフォルトは False。
+    """
+    import lib.data_saver as ds
+
+    export_df = df.replace([np.inf, -np.inf], np.nan).astype(object).fillna("")
+    ds.write_df_to_sheet(sheet_name, export_df, include_index=include_index)
+    logger.info(f"表（{len(df)} 行）を '{sheet_name}' シートに保存しました。")
+
+
+def sheet_is_configured() -> bool:
+    """
+    スプレッドシートへの出力先が設定されているかを返します。
+
+    スクリプトで、未設定ならシートへの出力だけを飛ばすときに使います。
+
+    Returns:
+        bool: 環境変数 SPREADSHEET_ID が設定されていれば True。
+    """
+    import lib.data_saver as ds
+
+    return ds.is_configured()
 
 
 def show(portfolio: vbt.Portfolio) -> None:

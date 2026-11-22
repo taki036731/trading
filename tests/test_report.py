@@ -122,6 +122,46 @@ def test_save_to_sheet(monkeypatch, daily_df, split_portfolio):
     assert len(written["MyTrades"][0]) == 1
 
 
+def test_save_table_to_sheet(monkeypatch):
+    """任意の表を保存でき、NaN と ±inf は空欄になり、元の表は変わらないことをテスト（#64）"""
+    written: dict[str, tuple[pd.DataFrame, bool]] = {}
+
+    def fake_write(sheet_name: str, df: pd.DataFrame, include_index: bool = False):
+        written[sheet_name] = (df, include_index)
+
+    monkeypatch.setattr(ds, "write_df_to_sheet", fake_write)
+    table = pd.DataFrame(
+        {
+            "ticker": ["A", "B", "C"],
+            "profit_factor": [1.5, float("inf"), float("nan")],
+            "num_trades": [3, 0, -1],
+            "worst": [-0.1, float("-inf"), 0.2],
+        }
+    )
+    report.save_table_to_sheet(table, "Multi_Summary")
+
+    exported, include_index = written["Multi_Summary"]
+    assert not include_index
+    assert exported["profit_factor"].tolist() == [1.5, "", ""]
+    assert exported["worst"].tolist() == [-0.1, "", 0.2]
+    assert exported["num_trades"].tolist() == [3, 0, -1]
+    assert exported["ticker"].tolist() == ["A", "B", "C"]
+    # 呼び出し元の表はそのまま
+    assert table["profit_factor"].iloc[1] == float("inf")
+
+
+@pytest.mark.parametrize(("value", "expected"), [("sheet-id", True), ("", False), (None, False)])
+def test_sheet_is_configured(monkeypatch, value, expected):
+    """SPREADSHEET_ID の有無で、出力先が設定されているかを返すことをテスト（#64）"""
+    # .env の内容に左右されないように、読み込みを止める
+    monkeypatch.setattr(ds, "load_dotenv", lambda: None)
+    if value is None:
+        monkeypatch.delenv("SPREADSHEET_ID", raising=False)
+    else:
+        monkeypatch.setenv("SPREADSHEET_ID", value)
+    assert report.sheet_is_configured() is expected
+
+
 def test_print_summary(capsys, split_portfolio):
     """結果サマリと最新の注文履歴を表示できることをテスト"""
     report.print_summary(split_portfolio, n_orders=1)

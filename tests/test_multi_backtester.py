@@ -1,14 +1,17 @@
 # vectorbt の portfolio.trades などを Pylance が関数と見なすため、このファイルではこのルールを無視する
 # pyright: reportFunctionMemberAccess=false
 
+import logging
 from dataclasses import fields
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from lib.backtester import SPLIT_BAR_OFFSET, Backtester, PreparedSignals
 from lib.metrics import calc_metrics
-from lib.multi_backtester import MultiBacktester, expand_param_grid
+from lib import multi_backtester
+from lib.multi_backtester import MultiBacktester, expand_param_grid, load_universe
 from lib.strategies.exits import AtrStopLoss, AtrTakeProfit
 from lib.strategies.indicators import ATRIndicator, MAIndicator
 from lib.strategies.position_sizing import RiskPercentageSizer
@@ -306,3 +309,55 @@ def test_run_portfolio_stops_on_entry_day():
 
     # 分けた行でも、口座の資産は NaN にならない
     assert not pf.value().isna().any()
+
+
+def test_aggregate_by_attribute():
+    data = {
+        "AAA": create_random_walk_df(seed=1),
+        "BBB": create_random_walk_df(seed=2),
+        "CCC": create_random_walk_df(seed=3),
+    }
+    mb = MultiBacktester(build_strategy, {"short": [5, 10]})
+    summary = mb.run_independent(data)
+    summary["size"] = summary["ticker"].map({"AAA": "Large", "BBB": "Small", "CCC": "Small"})
+    agg = mb.aggregate(summary, by=["size"])
+
+    assert agg[["short", "size"]].values.tolist() == [
+        [5, "Large"],
+        [5, "Small"],
+        [10, "Large"],
+        [10, "Small"],
+    ]
+    small = agg[(agg["short"] == 5) & (agg["size"] == "Small")].iloc[0]
+    group = summary[(summary["short"] == 5) & (summary["size"] == "Small")]
+    assert small["num_tickers"] == 2
+    assert small["total_return_median"] == pytest.approx(group["total_return"].median())
+
+
+def test_aggregate_by_missing_column():
+    mb = MultiBacktester(build_strategy)
+    summary = mb.run_independent({"AAA": create_random_walk_df(seed=1)})
+    with pytest.raises(ValueError, match="sector"):
+        mb.aggregate(summary, by=["sector"])
+
+
+def test_load_universe_skips_failed_tickers(monkeypatch, caplog):
+    """
+    空のデータや取得時の例外の銘柄はスキップし、最後に件数をまとめて警告することをテスト
+    """
+    df = create_random_walk_df(seed=1)
+
+    def fake_fetch(ticker, start=None, end=None, source=None):
+        if ticker == "ERR.T":
+            raise ConnectionError("network")
+        if ticker == "EMPTY.T":
+            return pd.DataFrame()
+        return df
+
+    monkeypatch.setattr(multi_backtester.dl, "fetch_stock_data", fake_fetch)
+    with caplog.at_level(logging.WARNING, logger="lib.multi_backtester"):
+        data = load_universe(["AAA.T", "ERR.T", "EMPTY.T", "BBB.T"])
+
+    assert list(data) == ["AAA.T", "BBB.T"]
+    assert "4 銘柄のうち 2 銘柄" in caplog.text
+    assert "ERR.T" in caplog.text and "EMPTY.T" in caplog.text

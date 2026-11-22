@@ -15,6 +15,7 @@ import pandas as pd
 import vectorbt as vbt
 
 from lib.metrics import portfolio_stats
+from lib.universe import SURVIVORSHIP_NOTE, has_survivorship_bias
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,24 @@ def print_summary(portfolio: vbt.Portfolio, n_orders: int = 5) -> None:
         print("【最新の注文履歴】")
         print(orders_table(portfolio).tail(n_orders))
         print("-" * 40)
+
+
+def print_universe_note(universe: pd.DataFrame, name: str) -> None:
+    """
+    検証したユニバースの名前・銘柄数と、生存者バイアスの注意書きを表示します。
+
+    結果を読むときに、どの銘柄で検証したかと、結果の限界が分かるように、集計の前に表示します。
+
+    Args:
+        universe (pd.DataFrame): lib.universe.load_universe_file の戻り値。
+        name (str): ユニバースの名前（ファイル名など）。
+    """
+    print("-" * 40)
+    print(f"【ユニバース】{name}（{len(universe)} 銘柄）")
+    if has_survivorship_bias(universe):
+        print(f"※ {SURVIVORSHIP_NOTE}")
+        logger.warning(f"[{name}] {SURVIVORSHIP_NOTE}")
+    print("-" * 40)
 
 
 def save_orders_csv(

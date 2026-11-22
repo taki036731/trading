@@ -96,9 +96,9 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 `MultiBacktester(factory, param_grid)` は、パラメータを受け取って新しい `Backtester` を返す関数(factory)を使って、複数銘柄を一括で検証する。
 
 - `run_independent(data, start=None, end=None)`: 銘柄 × パラメータの全組み合わせを独立した口座で実行し、1行1実行の指標(`lib/metrics.py` の `calc_metrics`)の DataFrame を返す
-- `aggregate(summary)`: パラメータごとに銘柄横断の中央値・平均・プラス銘柄の割合を出す。取引0回の銘柄は中央値・平均・`positive_ratio` から除外し、件数を `zero_trade_tickers` に出す。保有中のトレードだけの銘柄(`num_trades` が0で `open_trades` が1以上)は取引ありとして扱う(`total_return` に含み損益が入るため)
+- `aggregate(summary, by=None)`: パラメータごと(`by` に列名を渡すと、パラメータ × その列の値ごと。業種・規模別に見るときは `lib.universe.attach_attributes()` で `sector` / `size` を結合してから渡す)に銘柄横断の中央値・平均・プラス銘柄の割合を出す。取引0回の銘柄は中央値・平均・`positive_ratio` から除外し、件数を `zero_trade_tickers` に出す。保有中のトレードだけの銘柄(`num_trades` が0で `open_trades` が1以上)は取引ありとして扱う(`total_return` に含み損益が入るため)
 - `run_portfolio(data, params, start=None, end=None)`: 全銘柄を1つの口座(`cash_sharing=True`、`call_seq="auto"`)で運用する。銘柄ごとの `PreparedSignals` を(足を分割してから)`_combine()` で列=銘柄の DataFrame にまとめ、`from_signals` のキーワード引数(dict)として渡す(`PreparedSignals` には詰め直さない)。`SizeType.Percent` のサイザーは**現金残高**に対する割合になる。同じ日に買いが重なり現金が足りない場合は、**サイズの小さい順**に先着(`call_seq="auto"` が注文の大きさの順に処理するため)。サイズが同じなら `data` の銘柄の並び順で、サイザーの上限(`max_size`)に達した銘柄同士もこれになる
-- `load_universe(tickers, start, end, source=None)`: `fetch_stock_data` を銘柄ごとに呼んで `{ticker: df}` を返す
+- `load_universe(tickers, start, end, source=None)`: `fetch_stock_data` を銘柄ごとに呼んで `{ticker: df}` を返す。取得できなかった銘柄はスキップし、最後に件数をまとめて警告する
 
 ### 戦略コンポーネント(`lib/strategies/`)
 
@@ -117,11 +117,13 @@ DataLoader (lib/data_loader.py) -> Indicators -> Signals -> Exits (SL/TP) -> Pos
 - `lib/data_saver.py`: `gspread` で DataFrame を Google Sheets に書き込む。環境変数 `SPREADSHEET_ID` / `CREDENTIALS_FILE`(`.env` から読み込み)で遅延初期化する。`lib/report.py` の `save_chart_to_sheet()` / `save_orders_to_sheet()` / `save_trades_to_sheet()` はこれに依存しており、スプレッドシートが未設定だと例外になる(`data_saver` は関数の中で import するので、表示・CSV だけなら gspread も `.env` も要らない)
 - `lib/report.py`: バックテスト結果(`vbt.Portfolio`)の出力。`print_summary()`(サマリと最新の注文の表示)、`orders_table()` / `trades_table()`(`records_readable`。`pyright: ignore` はここにまとめてある)、`save_orders_csv()` / `save_trades_csv()`、`chart_table()`(株価・指標、シグナル、日付ごとに集約した約定を結合した表。12:00 の行の決済は日付にそろえる。複数銘柄の `Portfolio` では `column` で銘柄を絞る)、Sheets への保存、`show()`。`Backtester` は出力の処理を持たないので、`run()` / `run_portfolio()` の結果をここに渡す。出力の種類を足すときも、ここに関数を足す
 - `lib/metrics.py`: 成績の指標の計算。`year_freq(index)` は、行数 ÷ 暦年から1年あたりの本数を求める(vectorbt の既定値は `freq="D"` で365本/年で、営業日だけの日足では CAGR が小さく、シャープレシオが大きく出るため)。`calc_metrics()`(一括検証の指標)と `portfolio_stats()`(`stats()` の表示。`lib.report.print_summary()` などで使う)は、どちらもこの基準で年率換算する。年率の指標を新しく表示・計算するときも、`portfolio.stats()` などを直接呼ばずにこれらを使う。`entry_order_stats()` は、列(銘柄)ごとにエントリー注文の数・約定数・捨てられた数と理由(`OrderStatusInfo`)を返す(保有中のシグナルは注文にならないので数えない)。`calc_metrics()` の `entry_orders` / `entry_dropped` / `entry_fill_rate` もこれを使う。サイザーを追加したときは、この値で注文が通っているか確認する。`calc_metrics()` のトレード単位の指標(`num_trades`、`win_rate`、`profit_factor`、`expectancy`、`avg_trade_return`)は**決済済みのトレードだけ**で計算し(`trades.closed`。`portfolio_stats()` の Win Rate なども同じ)、期間の最後に保有中のトレードは `open_trades` に数える。含み損益で勝ち負けを数えると、データの終了日だけで値が変わるため。`total_return` などの口座単位の指標は含み損益を含む
+- `lib/universe.py`: 検証する銘柄ユニバースの管理(#13)。ユニバースは `universes/<名前>.csv`(UTF-8。`.gitignore` の `*.csv` の例外として Git で管理する)に置き、必須列は `ticker` / `name` / `sector`(東証33業種)/ `size`(TOPIX の規模区分)。`load_universe_file()` が列・`ticker` の空と重複を検証して読み込む(行の順序はそのまま。資金共有モードでサイズが同じ買いが重なったときの順序になる)。`has_survivorship_bias()` は、上場廃止日の列(`delisted_on`)がない・全て空なら True(今のユニバースは全てこれ)。`lib.report.print_universe_note()` がユニバースの名前・銘柄数と、生存者バイアスの注意書きを表示する。`universes/jpx_stratified_100.csv` は `tools/build_universe.py` が JPX の東証上場銘柄一覧(`universes/source/`、UTF-8 の CSV に変換したもの)から、規模区分ごとの件数(`SIZE_QUOTAS`)を33業種で層化して固定のシードで選んだもの。`tests/test_universe.py` が、作り直した結果と commit 済みのファイルの一致を確かめるので、設定や一覧を変えたら作り直して commit する。`universes/large5.csv` は以前の検証銘柄(大型株5銘柄)
 - `lib/__init__.py`: `setup_logging()` が `config/logging_config.json` を読み込む(`lib` と `tools` の名前空間のロガーを定義)。新しいエントリーポイントのスクリプトでは、ログ出力の前に1回呼ぶこと
 
 ### エントリーポイント・テスト
 
-- `tools/strategy01_multi.py`: strategy01 を複数銘柄 × 小さなパラメータグリッドで回すサンプル(CSV のみ出力)
+- `tools/strategy01_multi.py`: strategy01 を、ユニバース(`UNIVERSE_NAME`。既定値は `jpx_stratified_100`)の銘柄 × 小さなパラメータグリッドで回すサンプル(CSV のみ出力)。パラメータごとの集計に加えて、規模区分・業種ごとの集計も出す。CSV には `universe` 列で、どのユニバースの結果かを残す
+- `tools/build_universe.py`: `universes/jpx_stratified_100.csv` を作るスクリプト(上記の `lib/universe.py` を参照)
 - `tools/strategy01.py`: 基準となるサンプル。EMA 5/20 のゴールデン/デッドクロス、ATR のボラティリティフィルター、ATR ベースの損切り/利確、リスク割合サイジングを組み合わせ、`7203.T`(トヨタ)に対して実行する。データは2010年から取得し、評価期間は `EVAL_START`(2016-06-25)以降。新しい戦略スクリプトを `tools/` に作るときのテンプレートとして使う
 - `tests/helpers.py` の `create_base_df()`: 戦略のテスト用に、`short_ma` / `long_ma` / `atr` の列があらかじめ入った合成 OHLC の DataFrame を作る(indicator のステップを通さない)
 

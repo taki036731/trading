@@ -1,6 +1,7 @@
 import pandas_ta as ta  # noqa: F401
 
 from lib import data_loader as dl
+from lib import report
 from lib import setup_logging
 from lib.backtester import Backtester
 from lib.strategies.exits import (
@@ -35,11 +36,18 @@ if __name__ == "__main__":
         position_sizer=RiskPercentageSizer(0.02),
     )
 
-    backtester.run(df, start=EVAL_START)
-    backtester.display_stats()
-    backtester.save_orders_to_csv()
-    backtester.save_chart_to_sheet()
-    backtester.save_orders_to_sheet()
-    backtester.save_trades_to_sheet()
-    # backtester.show()
+    portfolio = backtester.run(df, start=EVAL_START)
+    report.print_summary(portfolio)
+    report.save_orders_csv(portfolio)
+    # チャートには、run() が残すインジケーターの列を足した株価データとシグナルを使う
+    assert backtester.df is not None
+    report.save_chart_to_sheet(
+        portfolio,
+        backtester.df,
+        backtester.entries_series,
+        backtester.exits_series,
+    )
+    report.save_orders_to_sheet(portfolio)
+    report.save_trades_to_sheet(portfolio)
+    # report.show(portfolio)
     input("Press Enter to close ...")

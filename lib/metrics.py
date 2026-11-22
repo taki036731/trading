@@ -21,6 +21,7 @@ METRIC_COLUMNS = [
     "sharpe",
     "sortino",
     "num_trades",
+    "open_trades",
     "win_rate",
     "profit_factor",
     "expectancy",
@@ -154,9 +155,33 @@ def warn_low_fill_rate(
         )
 
 
+def closed_and_open_trades(portfolio: vbt.Portfolio) -> tuple[Trades, Trades]:
+    """
+    Portfolio のトレードを、決済済みと、期間の最後に保有中（未決済）に分けて返します。
+
+    Args:
+        portfolio (vbt.Portfolio): バックテスト結果。
+
+    Returns:
+        tuple[Trades, Trades]: (決済済みのトレード, 保有中のトレード)。
+    """
+    # vectorbt の cached_property を Pylance が関数と見なすため、実際の型を明示する
+    trades = cast(Trades, portfolio.trades)
+    # closed / open は、vectorbt がクラスの定義時に追加する属性で、Pylance からは見えない
+    closed = cast(Trades, trades.closed)  # pyright: ignore[reportAttributeAccessIssue]
+    open_ = cast(Trades, trades.open)  # pyright: ignore[reportAttributeAccessIssue]
+    return closed, open_
+
+
 def calc_metrics(portfolio: vbt.Portfolio) -> dict[str, float]:
     """
     Portfolio から、戦略の比較に使う主要な指標を計算します。
+
+    トレード単位の指標（num_trades / win_rate / profit_factor / expectancy / avg_trade_return）は、
+    決済済みのトレードだけで計算します。期間の最後に保有中のトレードは含み損益で勝ち・負けが決まり、
+    データの終了日を変えるだけで値が変わるためです（portfolio_stats の Win Rate なども決済済みだけ）。
+    保有中のトレードの件数は open_trades に出します。
+    total_return / cagr / sharpe / exposure などの口座単位の指標は、含み損益を含みます。
 
     Args:
         portfolio (vbt.Portfolio): 単一銘柄（または資金共有でグループ化済み）の Portfolio。
@@ -164,8 +189,8 @@ def calc_metrics(portfolio: vbt.Portfolio) -> dict[str, float]:
     Returns:
         dict[str, float]: METRIC_COLUMNS をキーとする指標の辞書。
     """
+    trades, open_trades = closed_and_open_trades(portfolio)
     # vectorbt の cached_property を Pylance が関数と見なすため、実際の型を明示する
-    trades = cast(Trades, portfolio.trades)
     positions = cast(Positions, portfolio.positions)
     num_trades = int(trades.count())
     freq = year_freq(portfolio.wrapper.index)
@@ -177,6 +202,7 @@ def calc_metrics(portfolio: vbt.Portfolio) -> dict[str, float]:
         "sharpe": float(portfolio.sharpe_ratio(year_freq=freq)),  # pyright: ignore[reportAttributeAccessIssue]
         "sortino": float(portfolio.sortino_ratio(year_freq=freq)),  # pyright: ignore[reportAttributeAccessIssue]
         "num_trades": num_trades,
+        "open_trades": int(open_trades.count()),
         "win_rate": float(trades.win_rate()) if num_trades else np.nan,
         "profit_factor": float(trades.profit_factor()) if num_trades else np.nan,
         "expectancy": float(trades.expectancy()) if num_trades else np.nan,

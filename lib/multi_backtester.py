@@ -142,6 +142,8 @@ class MultiBacktester:
         1銘柄だけ良いパラメータではなく、多くの銘柄で安定して良いパラメータを探すために使います。
         取引が0回の銘柄（1単元を買えず、注文が全て捨てられた銘柄など）は戦略を評価できないため、
         positive_ratio と各指標の中央値・平均からは除外し、件数を zero_trade_tickers に出します。
+        決済済みのトレードがなく、保有中のトレードだけの銘柄は取引ありとして扱います
+        （total_return などには含み損益が入るため。win_rate などは NaN なので、その指標の集計からは外れます）。
 
         Args:
             summary (pd.DataFrame): run_independent の戻り値。
@@ -149,11 +151,12 @@ class MultiBacktester:
         Returns:
             pd.DataFrame: パラメータごとの集計。列は次のとおり。
                 - num_tickers: 銘柄数
-                - num_traded_tickers: 取引が1回以上あった銘柄数（集計の対象）
+                - num_traded_tickers: 取引（決済済みか保有中）が1回以上あった銘柄数（集計の対象）
                 - zero_trade_tickers: 取引が0回の銘柄数（集計から除外）
                 - positive_ratio: total_return がプラスの銘柄の割合（取引があった銘柄のうち）
                 - <指標>_median / <指標>_mean: 各指標の銘柄横断の中央値・平均（取引があった銘柄のみ）
-                - total_trades: 取引回数の合計
+                - total_trades: 決済済みのトレード数の合計
+                - total_open_trades: 期間の最後に保有中のトレード数の合計
                 - fill_rate_median: エントリー注文の約定率の銘柄横断の中央値（全銘柄。注文のない銘柄は除く）
                 - total_entry_dropped: 捨てられたエントリー注文の数の合計
         """
@@ -161,7 +164,7 @@ class MultiBacktester:
         metrics = ["total_return", "cagr", "max_drawdown", "sharpe", "win_rate", "profit_factor"]
 
         def _agg(group: pd.DataFrame) -> pd.Series:
-            traded = group[group["num_trades"] > 0]
+            traded = group[(group["num_trades"] + group["open_trades"]) > 0]
             result = {
                 "num_tickers": len(group),
                 "num_traded_tickers": len(traded),
@@ -177,6 +180,7 @@ class MultiBacktester:
                 result[f"{m}_median"] = values.median()
                 result[f"{m}_mean"] = values.mean()
             result["total_trades"] = int(group["num_trades"].sum())
+            result["total_open_trades"] = int(group["open_trades"].sum())
             result["fill_rate_median"] = group["entry_fill_rate"].median()
             result["total_entry_dropped"] = int(group["entry_dropped"].sum())
             return pd.Series(result)

@@ -3,3 +3,5 @@ __pycache__
 *.png
 .env
 cread/*
+# ユニバースの CSV は Git で管理する（#13）
+!universes/**/*.csv

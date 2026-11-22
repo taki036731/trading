@@ -17,12 +17,16 @@ from lib.strategies.signals import (
     DeadCrossSignal,
     GoldenCrossSignal,
 )
+from lib.universe import attach_attributes, load_universe_file, universe_path
 
 # python -m で実行すると __name__ が "__main__" になるため、tools のロガー設定が効く名前を固定で付ける
 logger = logging.getLogger("tools.strategy01_multi")
 
-# 検証する銘柄（資金共有モードで同じ日に買いが重なった場合は、サイズの小さい順に先着。サイズが同じならこの順）
-TICKERS = ["7203.T", "6758.T", "9984.T", "8306.T", "6861.T"]
+# 検証する銘柄ユニバース（universes/<名前>.csv。#13）
+# - jpx_stratified_100: TOPIX の構成銘柄から、規模区分 × 33業種で層化して選んだ100銘柄（tools/build_universe.py）
+# - large5: 以前の検証銘柄（大型株5銘柄）
+# 資金共有モードで同じ日に買いが重なった場合は、サイズの小さい順に先着。サイズが同じならファイルの行の順
+UNIVERSE_NAME = "jpx_stratified_100"
 
 # 検証するパラメータの候補（全組み合わせを実行する）
 PARAM_GRID = {
@@ -97,7 +101,9 @@ if __name__ == "__main__":
     pd.set_option("display.width", 200)
     pd.set_option("display.max_columns", 30)
 
-    data = load_universe(TICKERS, start="2010-01-01")
+    universe = load_universe_file(universe_path(UNIVERSE_NAME))
+    report.print_universe_note(universe, UNIVERSE_NAME)
+    data = load_universe(universe["ticker"], start="2010-01-01")
     mb = MultiBacktester(build_strategy, PARAM_GRID)
 
     # 0. 初期資金に対する1単元の金額（高い銘柄はエントリー注文が捨てられやすい）
@@ -109,14 +115,28 @@ if __name__ == "__main__":
         logger.warning(f"[{ticker}] 期間中に1単元の金額が初期資金を超えています。")
 
     # 1. 銘柄 × パラメータごとに独立して実行
-    summary = mb.run_independent(data, start=EVAL_START)
+    # 業種・規模で集計できるように、ユニバースの属性を結合する。どのユニバースの結果かを CSV に残す
+    summary = attach_attributes(mb.run_independent(data, start=EVAL_START), universe)
+    summary.insert(0, "universe", UNIVERSE_NAME)
     summary.to_csv("multi_summary.csv", index=False)
 
     # 2. パラメータごとに銘柄横断で集計（多くの銘柄で安定しているかを見る）
     by_params = mb.aggregate(summary)
+    by_params.insert(0, "universe", UNIVERSE_NAME)
     by_params.to_csv("multi_by_params.csv", index=False)
     print("【パラメータごとの銘柄横断集計】")
     print(by_params.sort_values("sharpe_median", ascending=False))
+
+    # 2'. パラメータ × 規模区分・業種で集計（特定の規模・業種だけで効いていないかを見る）
+    for col in ["size", "sector"]:
+        by_attr = mb.aggregate(summary, by=[col])
+        by_attr.insert(0, "universe", UNIVERSE_NAME)
+        by_attr.to_csv(f"multi_by_{col}.csv", index=False)
+    print("【パラメータ × 規模区分の集計（sharpe_median）】")
+    print(
+        mb.aggregate(summary, by=["size"])
+        .pivot_table(index=list(PARAM_GRID), columns="size", values="sharpe_median", sort=False)
+    )
 
     # 3. 資金共有モード（strategy01 と同じパラメータで、全銘柄を1つの口座で運用）
     portfolio = mb.run_portfolio(

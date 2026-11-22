@@ -29,7 +29,8 @@ def load_universe(
     """
     複数銘柄の株価データをまとめて取得します。
 
-    銘柄ごとに fetch_stock_data を呼び、データが取得できなかった銘柄は警告を出してスキップします。
+    銘柄ごとに fetch_stock_data を呼び、データが取得できなかった銘柄（空のデータ、または取得時の例外）は
+    警告を出してスキップします。
 
     Args:
         tickers (Iterable[str]): ティッカーシンボルのリスト（例: ['7203.T', '6758.T']）。
@@ -39,14 +40,29 @@ def load_universe(
 
     Returns:
         dict[str, pd.DataFrame]: ティッカーをキー、株価データを値とする辞書（指定順を保持）。
+            取得できなかった銘柄は含みません（件数と銘柄は最後にまとめて警告します）。
     """
     data: dict[str, pd.DataFrame] = {}
+    skipped: list[str] = []
     for ticker in tickers:
-        df = dl.fetch_stock_data(ticker, start=start, end=end, source=source)
+        try:
+            df = dl.fetch_stock_data(ticker, start=start, end=end, source=source)
+        except Exception as e:  # noqa: BLE001
+            # 銘柄が多いと、1銘柄の通信エラーなどで全体が止まらないようにする（理由は警告に出す）
+            logger.warning(f"[{ticker}] データの取得に失敗したためスキップします。：{e!r}")
+            skipped.append(ticker)
+            continue
         if df.empty:
             logger.warning(f"[{ticker}] データが取得できなかったためスキップします。")
+            skipped.append(ticker)
             continue
         data[ticker] = df
+    # 銘柄が多いと1件ずつの警告を見落としやすいため、最後にまとめて出す
+    if skipped:
+        logger.warning(
+            f"{len(data) + len(skipped)} 銘柄のうち {len(skipped)} 銘柄は"
+            f"データが取得できず、スキップしました。：{skipped}"
+        )
     return data
 
 
@@ -135,7 +151,7 @@ class MultiBacktester:
         columns = ["ticker", *self._param_names(), *METRIC_COLUMNS]
         return pd.DataFrame(rows, columns=columns)
 
-    def aggregate(self, summary: pd.DataFrame) -> pd.DataFrame:
+    def aggregate(self, summary: pd.DataFrame, by: list[str] | None = None) -> pd.DataFrame:
         """
         run_independent の結果を、パラメータごとに銘柄横断で集計します。
 
@@ -147,9 +163,13 @@ class MultiBacktester:
 
         Args:
             summary (pd.DataFrame): run_independent の戻り値。
+            by (list[str] | None): パラメータに加えて集計を分ける列（例: ['sector']、['size']）。
+                業種・規模などの列は lib.universe.attach_attributes で summary に結合しておきます。
+                None の場合はパラメータだけで分けます。
 
         Returns:
-            pd.DataFrame: パラメータごとの集計。列は次のとおり。
+            pd.DataFrame: パラメータごと（by を指定した場合は、パラメータ × by の値ごと）の集計。
+                列はパラメータ名、by の列と、次のとおり。
                 - num_tickers: 銘柄数
                 - num_traded_tickers: 取引（決済済みか保有中）が1回以上あった銘柄数（集計の対象）
                 - zero_trade_tickers: 取引が0回の銘柄数（集計から除外）
@@ -160,7 +180,11 @@ class MultiBacktester:
                 - fill_rate_median: エントリー注文の約定率の銘柄横断の中央値（全銘柄。注文のない銘柄は除く）
                 - total_entry_dropped: 捨てられたエントリー注文の数の合計
         """
-        param_names = self._param_names()
+        by = list(by or [])
+        missing = [col for col in by if col not in summary.columns]
+        if missing:
+            raise ValueError(f"エラー: 集計を分ける列 {missing} が summary にありません。")
+        keys = [*self._param_names(), *by]
         metrics = ["total_return", "cagr", "max_drawdown", "sharpe", "win_rate", "profit_factor"]
 
         def _agg(group: pd.DataFrame) -> pd.Series:
@@ -185,11 +209,12 @@ class MultiBacktester:
             result["total_entry_dropped"] = int(group["entry_dropped"].sum())
             return pd.Series(result)
 
-        if not param_names:
+        if not keys:
             return _agg(summary).to_frame().T
 
         return (
-            summary.groupby(param_names, sort=False)[METRIC_COLUMNS]
+            # by の列に NaN（ユニバースにない銘柄）があっても行を落とさない
+            summary.groupby(keys, sort=False, dropna=False)[METRIC_COLUMNS]
             .apply(_agg)
             .reset_index()
         )

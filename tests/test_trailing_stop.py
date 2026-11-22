@@ -15,7 +15,7 @@ from lib.strategies.indicators import ATRIndicator, MAIndicator
 from lib.strategies.position_sizing import RiskPercentageSizer
 from lib.strategies.signals import DeadCrossSignal, GoldenCrossSignal
 
-from .helpers import create_base_df, create_random_walk_df
+from .helpers import assert_same_daily_result, create_base_df, create_random_walk_df
 
 # index=10 でゴールデンクロス -> index=11 の始値 1000 でエントリー
 ENTRY = 11
@@ -191,7 +191,7 @@ def test_run_portfolio_uses_trailing_stop():
     assert len(expected.wrapper.index) > len(df), "足を分ける日が出るデータでテストする"
 
     actual = MultiBacktester(factory).run_portfolio({"AAA": df})
-    np.testing.assert_allclose(actual.value().to_numpy().ravel(), expected.value().to_numpy())
+    assert_same_daily_result(actual, expected)
     # 分割した 12:00 の行は、元の日付の行の直後に入っている
     rest_index = cast(pd.DatetimeIndex, actual.wrapper.index.difference(df.index))
     assert len(rest_index) > 0

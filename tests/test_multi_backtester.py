@@ -2,6 +2,7 @@
 # pyright: reportFunctionMemberAccess=false
 
 import logging
+from collections.abc import Callable
 from dataclasses import fields
 
 import numpy as np
@@ -17,7 +18,7 @@ from lib.strategies.indicators import ATRIndicator, MAIndicator
 from lib.strategies.position_sizing import RiskPercentageSizer
 from lib.strategies.signals import DeadCrossSignal, GoldenCrossSignal
 
-from .helpers import create_base_df, create_random_walk_df
+from .helpers import assert_same_daily_result, create_base_df, create_random_walk_df
 
 
 def build_strategy(short: int = 5, long: int = 20, tp_mult: float = 4) -> Backtester:
@@ -116,9 +117,10 @@ def test_run_portfolio_single_ticker_matches_backtester():
     資金共有モードで1銘柄だけ渡した場合、Backtester.run と同じ資産推移になることをテスト
     """
     df = create_random_walk_df(seed=1)
-    expected = build_strategy().run(df.copy()).value()
-    actual = MultiBacktester(build_strategy).run_portfolio({"AAA": df}).value()
-    np.testing.assert_allclose(actual.values, expected.values)
+    expected = build_strategy().run(df.copy())
+    actual = MultiBacktester(build_strategy).run_portfolio({"AAA": df})
+    assert len(expected.trades.records) > 0, "取引が発生するデータでテストする"
+    assert_same_daily_result(actual, expected)
 
 
 def test_run_portfolio_shares_cash():
@@ -275,11 +277,11 @@ def test_run_portfolio_single_ticker_matches_backtester_with_split_bars():
     足を分ける日があっても、資金共有モードの1銘柄は Backtester.run と同じ資産推移になることをテスト
     """
     df = create_random_walk_df(days=500, seed=3)
-    expected = build_narrow_stop_strategy().run(df.copy()).value()
-    assert len(expected) > len(df), "足を分ける日が出るデータでテストする"
+    expected = build_narrow_stop_strategy().run(df.copy())
+    assert len(expected.wrapper.index) > len(df), "足を分ける日が出るデータでテストする"
 
-    actual = MultiBacktester(build_narrow_stop_strategy).run_portfolio({"AAA": df}).value()
-    np.testing.assert_allclose(actual.values, expected.values)
+    actual = MultiBacktester(build_narrow_stop_strategy).run_portfolio({"AAA": df})
+    assert_same_daily_result(actual, expected)
 
 
 def test_run_portfolio_stops_on_entry_day():
@@ -309,6 +311,110 @@ def test_run_portfolio_stops_on_entry_day():
 
     # 分けた行でも、口座の資産は NaN にならない
     assert not pf.value().isna().any()
+
+
+def build_manual_strategy_with_dead_cross() -> Backtester:
+    """build_manual_strategy に、デッドクロスでのエグジット（始値で約定）を足した戦略"""
+    return Backtester(
+        indicators=[],
+        entries=[GoldenCrossSignal()],
+        exits=[DeadCrossSignal()],
+        tp=AtrTakeProfit(100),  # 利確させない
+        sl=AtrStopLoss(2),
+        position_sizer=RiskPercentageSizer(0.02),
+    )
+
+
+# AAA の買い（約10万円）の後、BBB の 1単元（約10万円）を買うには現金が足りず、
+# AAA の売却代金が戻れば買える初期資金
+CASH_FOR_ONE_LOT = 250_000.0
+
+
+def _run_after_aaa_exit(
+    aaa,
+    bbb_cross_day: int,
+    factory: Callable[[], Backtester] = build_manual_strategy,
+):
+    """AAA が 6日目に買い、BBB が bbb_cross_day + 1 日目に買おうとする資金共有の Portfolio"""
+    return MultiBacktester(factory).run_portfolio(
+        {"AAA": aaa, "BBB": golden_cross_df(bbb_cross_day)}, init_cash=CASH_FOR_ONE_LOT
+    )
+
+
+def _orders(pf, column: str):
+    orders = pf.orders.records_readable
+    return orders[orders["Column"] == column]
+
+
+def test_run_portfolio_intraday_stop_cash_not_used_for_same_day_open_buy():
+    """
+    場中の SL の決済の代金は、同じ日の始値の買いには使えず、翌日の買いから使えることをテスト（Issue #36）
+    """
+    aaa = golden_cross_df(5)
+    stop_day = aaa.index[11]
+    aaa.loc[stop_day, "Low"] = aaa.loc[stop_day, "Open"] - 100  # 場中に SL ライン（2ATR=40 下）を割る
+
+    # 同じ日の始値の買い: AAA の売却代金はまだ使えず、現金不足で買えない
+    same_day = _run_after_aaa_exit(aaa, bbb_cross_day=10)
+    sell = _orders(same_day, "AAA").iloc[-1]
+    assert (sell["Side"], sell["Timestamp"]) == ("Sell", stop_day + SPLIT_BAR_OFFSET)
+    assert _orders(same_day, "BBB").empty
+
+    # 翌日の始値の買い: AAA の売却代金で買える
+    next_day = _run_after_aaa_exit(aaa, bbb_cross_day=11)
+    bbb = _orders(next_day, "BBB")
+    assert bbb["Timestamp"].tolist() == [aaa.index[12]]
+    assert bbb["Size"].tolist() == [100]
+
+
+def test_run_portfolio_gap_stop_cash_not_used_for_same_day_open_buy():
+    """
+    寄り付きのギャップで SL ラインを越えた決済（始値で約定）の代金も、同じ日の始値の買いには使えないことをテスト
+    """
+    aaa = golden_cross_df(5)
+    stop_day = aaa.index[11]
+    aaa.loc[stop_day, ["Open", "Low"]] = aaa.loc[stop_day, "Open"] - 100  # 始値で SL ラインを割る
+
+    pf = _run_after_aaa_exit(aaa, bbb_cross_day=10)
+    sell = _orders(pf, "AAA").iloc[-1]
+    assert (sell["Side"], sell["Timestamp"]) == ("Sell", stop_day + SPLIT_BAR_OFFSET)
+    # 約定価格は始値（スリッページ込み）で、分けない場合と同じ
+    assert sell["Price"] == pytest.approx(aaa.loc[stop_day, "Open"] * (1 - 0.001))
+    assert _orders(pf, "BBB").empty
+
+
+def test_run_portfolio_signal_exit_cash_used_for_same_day_open_buy():
+    """
+    シグナルの売り（始値で約定）の代金は、同じ日の始値の買いに使えることをテスト
+    """
+    aaa = golden_cross_df(5)
+    aaa.loc[aaa.index[10:], "short_ma"] = 990  # 10日目にデッドクロス → 11日目の始値で売る
+
+    pf = _run_after_aaa_exit(aaa, bbb_cross_day=10, factory=build_manual_strategy_with_dead_cross)
+    sell = _orders(pf, "AAA").iloc[-1]
+    assert (sell["Side"], sell["Timestamp"]) == ("Sell", aaa.index[11])
+    bbb = _orders(pf, "BBB")
+    assert bbb["Timestamp"].tolist() == [aaa.index[11]]
+    assert bbb["Size"].tolist() == [100]
+
+
+def test_split_bars_for_cash_sharing_first_bar_is_previous_close():
+    """
+    資金共有用に分けた足の1行目は前日終値だけの足で、シグナル・サイズは1行目に残ることをテスト
+    """
+    df = golden_cross_df(5)
+    prepared = build_manual_strategy().prepare(df.copy())
+    day = df.index[11]
+    split = prepared.split_bars_for_cash_sharing(pd.DatetimeIndex([day]))
+
+    prev_close = df["Close"].iloc[10]
+    for attr in ["open", "high", "low", "close"]:
+        assert getattr(split, attr)[day] == prev_close
+        assert getattr(split, attr)[day + SPLIT_BAR_OFFSET] == df[attr.capitalize()].iloc[11]
+    assert split.price[day] == prepared.price[day]
+    assert split.entries[day] == prepared.entries[day]
+    assert not split.entries[day + SPLIT_BAR_OFFSET]
+    assert len(split.close) == len(df) + 1
 
 
 def test_aggregate_by_attribute():

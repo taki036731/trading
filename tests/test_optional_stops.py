@@ -13,7 +13,7 @@ from lib.strategies.exits import AtrStopLoss, AtrTakeProfit
 from lib.strategies.position_sizing import AbstractPositionSizer, RiskPercentageSizer
 from lib.strategies.signals import DeadCrossSignal, GoldenCrossSignal
 
-from .helpers import create_base_df
+from .helpers import assert_same_daily_result, create_base_df
 
 # index=10 でゴールデンクロス -> index=11 の始値 1000 でエントリー
 ENTRY = 11
@@ -214,5 +214,5 @@ def test_run_portfolio_without_stops_matches_backtester():
     df = _create_cross_df()
     expected = _build().run(df.copy())
     actual = MultiBacktester(_build).run_portfolio({"AAA": df})
-    np.testing.assert_allclose(actual.value().values, expected.value().values)
+    assert_same_daily_result(actual, expected)
     assert len(actual.trades.records) == 1

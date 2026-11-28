@@ -25,18 +25,23 @@ def load_universe(
     start: str | None = None,
     end: str | None = None,
     source: AbstractPriceSource | None = None,
+    mode: dl.DataMode | None = None,
+    max_age_days: float | None = None,
 ) -> dict[str, pd.DataFrame]:
     """
     複数銘柄の株価データをまとめて取得します。
 
     銘柄ごとに fetch_stock_data を呼び、データが取得できなかった銘柄（空のデータ、または取得時の例外）は
-    警告を出してスキップします。
+    警告を出してスキップします。オフラインモードでキャッシュのない銘柄も、同じくスキップします。
+    最後に、取得できた銘柄のデータの最終日（最古・最新）をまとめてログに出します。
 
     Args:
         tickers (Iterable[str]): ティッカーシンボルのリスト（例: ['7203.T', '6758.T']）。
         start (str, optional): データの取得開始日（'YYYY-MM-DD'）。
         end (str, optional): データの取得終了日（'YYYY-MM-DD'）。
         source (AbstractPriceSource, optional): 株価データの取得元。デフォルトは None（YFinanceSource）。
+        mode (DataMode, optional): 取得モード（'auto' / 'offline' / 'refresh'）。fetch_stock_data に渡します。
+        max_age_days (float, optional): auto のときのキャッシュの有効期限（日数）。fetch_stock_data に渡します。
 
     Returns:
         dict[str, pd.DataFrame]: ティッカーをキー、株価データを値とする辞書（指定順を保持）。
@@ -46,7 +51,14 @@ def load_universe(
     skipped: list[str] = []
     for ticker in tickers:
         try:
-            df = dl.fetch_stock_data(ticker, start=start, end=end, source=source)
+            df = dl.fetch_stock_data(
+                ticker,
+                start=start,
+                end=end,
+                source=source,
+                mode=mode,
+                max_age_days=max_age_days,
+            )
         except Exception as e:  # noqa: BLE001
             # 銘柄が多いと、1銘柄の通信エラーなどで全体が止まらないようにする（理由は警告に出す）
             logger.warning(f"[{ticker}] データの取得に失敗したためスキップします。：{e!r}")
@@ -62,6 +74,13 @@ def load_universe(
         logger.warning(
             f"{len(data) + len(skipped)} 銘柄のうち {len(skipped)} 銘柄は"
             f"データが取得できず、スキップしました。：{skipped}"
+        )
+    # オフラインでは結果がキャッシュの時点で変わるため、データの最終日の範囲を残す（#66）
+    if data:
+        last_dates = pd.Series({ticker: df.index.max() for ticker, df in data.items()})
+        logger.info(
+            f"データの最終日: 最古 {last_dates.min():%Y-%m-%d}（{last_dates.idxmin()}）、"
+            f"最新 {last_dates.max():%Y-%m-%d}（{last_dates.idxmax()}）"
         )
     return data
 

@@ -18,7 +18,7 @@ from lib.strategies.signals import (
     DeadCrossSignal,
     GoldenCrossSignal,
 )
-from lib.universe import attach_attributes, load_universe_file, universe_path
+from lib.universe import attach_attributes, data_from_map, load_universe_file, universe_path
 
 # python -m で実行すると __name__ が "__main__" になるため、tools のロガー設定が効く名前を固定で付ける
 logger = logging.getLogger("tools.strategy01_multi")
@@ -110,7 +110,10 @@ if __name__ == "__main__":
 
     universe = load_universe_file(universe_path(UNIVERSE_NAME))
     report.print_universe_note(universe, UNIVERSE_NAME)
-    data = load_universe(universe["ticker"], start="2010-01-01")
+    # 上場前のデータが壊れている銘柄は、ユニバースの data_from の日から使う（#70）
+    data = load_universe(
+        universe["ticker"], start="2010-01-01", data_from=data_from_map(universe)
+    )
     mb = MultiBacktester(build_strategy, PARAM_GRID)
 
     # 0. 初期資金に対する1単元の金額（高い銘柄はエントリー注文が捨てられやすい）

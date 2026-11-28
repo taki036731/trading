@@ -5,14 +5,17 @@ import pandas as pd
 import pytest
 
 from lib.universe import (
+    DATA_FROM_COLUMN,
     DELISTED_COLUMN,
     UNIVERSE_COLUMNS,
     attach_attributes,
+    data_from_map,
     has_survivorship_bias,
     load_universe_file,
     universe_path,
 )
 from tools.build_universe import (
+    DATA_FROM_OVERRIDES,
     SIZE_QUOTAS,
     SOURCE_PATH,
     SOURCE_COLUMNS,
@@ -68,6 +71,32 @@ def test_has_survivorship_bias(tmp_path):
 
     with_delisted = listed_only.assign(**{DELISTED_COLUMN: ["", "2020-03-31"]})
     assert not has_survivorship_bias(with_delisted)
+
+
+def test_data_from_map(tmp_path):
+    """data_from の空でない銘柄だけを、'YYYY-MM-DD' にそろえて返す（#70）"""
+    rows = [
+        {**_row("7203.T"), DATA_FROM_COLUMN: ""},
+        {**_row("8919.T"), DATA_FROM_COLUMN: "2017/12/12"},
+    ]
+    universe = load_universe_file(_write_csv(tmp_path, rows))
+    assert data_from_map(universe) == {"8919.T": "2017-12-12"}
+    # 列がないユニバース（large5 など）は空
+    assert data_from_map(load_universe_file(_write_csv(tmp_path, [_row("7203.T")]))) == {}
+
+
+def test_data_from_map_rejects_invalid_date(tmp_path):
+    rows = [{**_row("8919.T"), DATA_FROM_COLUMN: "上場日"}]
+    with pytest.raises(ValueError, match="8919.T"):
+        data_from_map(load_universe_file(_write_csv(tmp_path, rows)))
+
+
+def test_committed_universe_has_data_from_overrides():
+    """commit 済みのユニバースの data_from が、DATA_FROM_OVERRIDES と一致することをテスト（一覧がなくても確かめる）"""
+    universe = load_universe_file(universe_path("jpx_stratified_100"))
+    assert data_from_map(universe) == {
+        t: d for t, d in DATA_FROM_OVERRIDES.items() if t in set(universe["ticker"])
+    }
 
 
 def test_attach_attributes_keeps_summary_rows():

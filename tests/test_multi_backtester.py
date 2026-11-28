@@ -490,6 +490,29 @@ def test_load_universe_passes_mode_and_logs_last_dates(monkeypatch, caplog):
     assert f"最新 {df.index[-1]:%Y-%m-%d}（NEW.T）" in caplog.text
 
 
+def test_load_universe_starts_from_data_from(monkeypatch):
+    """
+    data_from がある銘柄は、start とその日の遅い方から取得することをテスト（#70）
+    """
+    df = create_random_walk_df(seed=1)
+    starts = {}
+
+    def fake_fetch(ticker, start=None, end=None, source=None, **kwargs):
+        starts[ticker] = start
+        return df
+
+    monkeypatch.setattr(multi_backtester.dl, "fetch_stock_data", fake_fetch)
+    load_universe(
+        ["AAA.T", "NEW.T", "OLD.T"],
+        start="2010-01-01",
+        data_from={"NEW.T": "2017-12-12", "OLD.T": "2005-01-01"},
+    )
+    assert starts == {"AAA.T": "2010-01-01", "NEW.T": "2017-12-12", "OLD.T": "2010-01-01"}
+
+    load_universe(["NEW.T"], data_from={"NEW.T": "2017/12/12"})
+    assert starts["NEW.T"] == "2017-12-12"
+
+
 def test_run_independent_adds_buy_and_hold_columns():
     """
     run_independent に、同じ評価期間・初期資金・取引コストでの買い持ちの列と、

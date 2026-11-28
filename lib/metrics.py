@@ -173,6 +173,34 @@ def closed_and_open_trades(portfolio: vbt.Portfolio) -> tuple[Trades, Trades]:
     return closed, open_
 
 
+# 口座単位の指標（含み損益を含む）。買い持ちのベンチマーク（lib.benchmark）と同じ関数で計算する
+ACCOUNT_METRIC_COLUMNS = ["total_return", "cagr", "max_drawdown", "sharpe", "sortino"]
+
+
+def account_metrics(portfolio: vbt.Portfolio) -> dict[str, float]:
+    """
+    Portfolio から、口座単位の指標（ACCOUNT_METRIC_COLUMNS）を計算します。
+
+    年率換算は year_freq（データの実際の本数）を基準にします。
+    戦略の結果（calc_metrics）と買い持ちのベンチマーク（lib.benchmark）を同じ基準で比べるために共通化しています。
+
+    Args:
+        portfolio (vbt.Portfolio): 単一銘柄（または資金共有でグループ化済み）の Portfolio。
+
+    Returns:
+        dict[str, float]: ACCOUNT_METRIC_COLUMNS をキーとする指標の辞書。含み損益を含みます。
+    """
+    freq = year_freq(portfolio.wrapper.index)
+    # annualized_return などは、vectorbt がクラスの定義時に追加する属性で、Pylance からは見えない
+    return {
+        "total_return": float(portfolio.total_return()),
+        "cagr": float(portfolio.annualized_return(year_freq=freq)),  # pyright: ignore[reportAttributeAccessIssue]
+        "max_drawdown": float(portfolio.max_drawdown()),  # pyright: ignore[reportAttributeAccessIssue]
+        "sharpe": float(portfolio.sharpe_ratio(year_freq=freq)),  # pyright: ignore[reportAttributeAccessIssue]
+        "sortino": float(portfolio.sortino_ratio(year_freq=freq)),  # pyright: ignore[reportAttributeAccessIssue]
+    }
+
+
 def calc_metrics(portfolio: vbt.Portfolio) -> dict[str, float]:
     """
     Portfolio から、戦略の比較に使う主要な指標を計算します。
@@ -193,14 +221,9 @@ def calc_metrics(portfolio: vbt.Portfolio) -> dict[str, float]:
     # vectorbt の cached_property を Pylance が関数と見なすため、実際の型を明示する
     positions = cast(Positions, portfolio.positions)
     num_trades = int(trades.count())
-    freq = year_freq(portfolio.wrapper.index)
-    # annualized_return や trades.returns などは、vectorbt がクラスの定義時に追加する属性で、Pylance からは見えない
+    # trades.returns などは、vectorbt がクラスの定義時に追加する属性で、Pylance からは見えない
     return {
-        "total_return": float(portfolio.total_return()),
-        "cagr": float(portfolio.annualized_return(year_freq=freq)),  # pyright: ignore[reportAttributeAccessIssue]
-        "max_drawdown": float(portfolio.max_drawdown()),  # pyright: ignore[reportAttributeAccessIssue]
-        "sharpe": float(portfolio.sharpe_ratio(year_freq=freq)),  # pyright: ignore[reportAttributeAccessIssue]
-        "sortino": float(portfolio.sortino_ratio(year_freq=freq)),  # pyright: ignore[reportAttributeAccessIssue]
+        **account_metrics(portfolio),
         "num_trades": num_trades,
         "open_trades": int(open_trades.count()),
         "win_rate": float(trades.win_rate()) if num_trades else np.nan,

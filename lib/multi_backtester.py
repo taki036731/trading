@@ -9,6 +9,13 @@ import vectorbt as vbt
 
 from lib import data_loader as dl
 from lib.backtester import JP_MARKET_PARAMS, Backtester, DateLike, PreparedSignals
+from lib.benchmark import (
+    BH_METRIC_COLUMNS,
+    EXCESS_COLUMN,
+    benchmark_metrics,
+    bh_columns,
+    buy_and_hold,
+)
 from lib.data_sources import AbstractPriceSource
 from lib.metrics import (
     METRIC_COLUMNS,
@@ -141,6 +148,7 @@ class MultiBacktester:
         data: dict[str, pd.DataFrame],
         start: DateLike | None = None,
         end: DateLike | None = None,
+        benchmark: bool = True,
     ) -> pd.DataFrame:
         """
         銘柄 × パラメータの全組み合わせを、それぞれ独立した口座で実行します。
@@ -154,11 +162,30 @@ class MultiBacktester:
             start (DateLike | None): 評価期間の開始日（その日を含む）。None の場合は各銘柄のデータの先頭から。
                 それより前のデータは、インジケーターのウォームアップにだけ使います（Backtester.run と同じ）。
             end (DateLike | None): 評価期間の終了日（その日を含む）。None の場合は各銘柄のデータの末尾まで。
+            benchmark (bool): True の場合、同じ評価期間・取引コストでのその銘柄の買い持ち
+                （lib.benchmark.buy_and_hold）の指標と、戦略との差の列を足します（#8）。
 
         Returns:
             pd.DataFrame: 1行1実行の結果。列は ticker、パラメータ名、METRIC_COLUMNS。
+                benchmark が True なら、続けて BH_METRIC_COLUMNS（bh_total_return / bh_cagr /
+                bh_max_drawdown / bh_sharpe）と excess_cagr（戦略の CAGR − 買い持ちの CAGR）。
                 最良の組み合わせだけでなく、全組み合わせを返します。
         """
+        # 買い持ちはパラメータによらないので、銘柄ごとに1回だけ計算する。
+        # 初期資金と取引コストは、factory が作る Backtester の値を使う
+        bh_metrics: dict[str, dict[str, float]] = {}
+        if benchmark:
+            reference = self.factory(**self.param_sets[0])
+            for ticker, df in data.items():
+                bh = buy_and_hold(
+                    df,
+                    start=start,
+                    end=end,
+                    init_cash=reference.init_cash,
+                    **reference.cost_params,
+                )
+                bh_metrics[ticker] = benchmark_metrics(bh)
+
         rows = []
         for params in self.param_sets:
             for ticker, df in data.items():
@@ -166,8 +193,13 @@ class MultiBacktester:
                 portfolio = backtester.run(
                     df, name=f"{ticker} {params}", start=start, end=end
                 )
-                rows.append({"ticker": ticker, **params, **calc_metrics(portfolio)})
+                metrics = calc_metrics(portfolio)
+                if benchmark:
+                    metrics.update(bh_columns(bh_metrics[ticker], metrics["cagr"]))
+                rows.append({"ticker": ticker, **params, **metrics})
         columns = ["ticker", *self._param_names(), *METRIC_COLUMNS]
+        if benchmark:
+            columns += [*BH_METRIC_COLUMNS, EXCESS_COLUMN]
         return pd.DataFrame(rows, columns=columns)
 
     def aggregate(self, summary: pd.DataFrame, by: list[str] | None = None) -> pd.DataFrame:
@@ -194,6 +226,9 @@ class MultiBacktester:
                 - zero_trade_tickers: 取引が0回の銘柄数（集計から除外）
                 - positive_ratio: total_return がプラスの銘柄の割合（取引があった銘柄のうち）
                 - <指標>_median / <指標>_mean: 各指標の銘柄横断の中央値・平均（取引があった銘柄のみ）
+                - bh_cagr_median: その銘柄の買い持ちの CAGR の中央値（summary に買い持ちの列がある場合。以下3つも同じ）
+                - excess_cagr_median / excess_cagr_mean: 戦略の CAGR − 買い持ちの CAGR の中央値・平均
+                - beat_bh_ratio: 買い持ちより CAGR が高かった銘柄の割合（取引があった銘柄のうち）
                 - total_trades: 決済済みのトレード数の合計
                 - total_open_trades: 期間の最後に保有中のトレード数の合計
                 - fill_rate_median: エントリー注文の約定率の銘柄横断の中央値（全銘柄。注文のない銘柄は除く）
@@ -222,18 +257,31 @@ class MultiBacktester:
                 values = traded[m].replace([np.inf, -np.inf], np.nan)
                 result[f"{m}_median"] = values.median()
                 result[f"{m}_mean"] = values.mean()
+            if EXCESS_COLUMN in group.columns:
+                # 買い持ちとの比較（取引があった銘柄のみ。他の指標と同じ扱い）
+                result["bh_cagr_median"] = traded["bh_cagr"].median()
+                result["excess_cagr_median"] = traded[EXCESS_COLUMN].median()
+                result["excess_cagr_mean"] = traded[EXCESS_COLUMN].mean()
+                result["beat_bh_ratio"] = (
+                    float((traded[EXCESS_COLUMN] > 0).mean()) if len(traded) else np.nan
+                )
             result["total_trades"] = int(group["num_trades"].sum())
             result["total_open_trades"] = int(group["open_trades"].sum())
             result["fill_rate_median"] = group["entry_fill_rate"].median()
             result["total_entry_dropped"] = int(group["entry_dropped"].sum())
             return pd.Series(result)
 
+        # 買い持ちの列（run_independent(benchmark=True)）があれば、集計に含める
+        value_columns = [
+            *METRIC_COLUMNS,
+            *[c for c in [*BH_METRIC_COLUMNS, EXCESS_COLUMN] if c in summary.columns],
+        ]
         if not keys:
             return _agg(summary).to_frame().T
 
         return (
             # by の列に NaN（ユニバースにない銘柄）があっても行を落とさない
-            summary.groupby(keys, sort=False, dropna=False)[METRIC_COLUMNS]
+            summary.groupby(keys, sort=False, dropna=False)[value_columns]
             .apply(_agg)
             .reset_index()
         )

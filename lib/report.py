@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import vectorbt as vbt
 
-from lib.metrics import portfolio_stats
+from lib.metrics import ACCOUNT_METRIC_COLUMNS, account_metrics, portfolio_stats
 from lib.universe import SURVIVORSHIP_NOTE, has_survivorship_bias
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,48 @@ def print_summary(portfolio: vbt.Portfolio, n_orders: int = 5) -> None:
         print("【最新の注文履歴】")
         print(orders_table(portfolio).tail(n_orders))
         print("-" * 40)
+
+
+def benchmark_table(
+    strategy: vbt.Portfolio, benchmarks: dict[str, vbt.Portfolio]
+) -> pd.DataFrame:
+    """
+    戦略と買い持ちのベンチマークの口座単位の指標を、列に並べた表を作ります（#8）。
+
+    どれも lib.metrics.account_metrics で計算するので、年率換算の基準がそろいます。
+
+    Args:
+        strategy (vbt.Portfolio): 戦略のバックテスト結果。
+        benchmarks (dict[str, vbt.Portfolio]): 名前をキー、買い持ちの Portfolio
+            （lib.benchmark.buy_and_hold など）を値とする辞書。
+
+    Returns:
+        pd.DataFrame: 行は指標（ACCOUNT_METRIC_COLUMNS）、列は "strategy" と各ベンチマークの名前。
+    """
+    columns = {"strategy": account_metrics(strategy)}
+    columns.update({name: account_metrics(p) for name, p in benchmarks.items()})
+    return pd.DataFrame(columns).reindex(ACCOUNT_METRIC_COLUMNS)
+
+
+def print_benchmark_comparison(
+    strategy: vbt.Portfolio, benchmarks: dict[str, vbt.Portfolio]
+) -> pd.DataFrame:
+    """
+    戦略と買い持ちのベンチマークの比較表（benchmark_table）を表示します。
+
+    Args:
+        strategy (vbt.Portfolio): 戦略のバックテスト結果。
+        benchmarks (dict[str, vbt.Portfolio]): 名前をキー、買い持ちの Portfolio を値とする辞書。
+
+    Returns:
+        pd.DataFrame: 表示した表（CSV やシートにも出せるように返す）。
+    """
+    table = benchmark_table(strategy, benchmarks)
+    print("-" * 40)
+    print("【買い持ちとの比較】（同じ評価期間・取引コスト。買い持ちは初日の始値で買い、最終日の終値で評価）")
+    print(table)
+    print("-" * 40)
+    return table
 
 
 def print_universe_note(universe: pd.DataFrame, name: str) -> None:

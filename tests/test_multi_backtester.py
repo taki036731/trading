@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from lib.backtester import SPLIT_BAR_OFFSET, Backtester, PreparedSignals
+from lib.benchmark import benchmark_metrics, buy_and_hold
 from lib.metrics import calc_metrics
 from lib import multi_backtester
 from lib.multi_backtester import MultiBacktester, expand_param_grid, load_universe
@@ -487,3 +488,38 @@ def test_load_universe_passes_mode_and_logs_last_dates(monkeypatch, caplog):
     assert calls == [{"mode": "offline", "max_age_days": 3}] * 2
     assert f"最古 {df.index[-6]:%Y-%m-%d}（OLD.T）" in caplog.text
     assert f"最新 {df.index[-1]:%Y-%m-%d}（NEW.T）" in caplog.text
+
+
+def test_run_independent_adds_buy_and_hold_columns():
+    """
+    run_independent に、同じ評価期間・初期資金・取引コストでの買い持ちの列と、
+    戦略との CAGR の差（excess_cagr）が入ることをテスト
+    """
+    data = {"AAA": create_random_walk_df(seed=1), "BBB": create_random_walk_df(seed=2)}
+    start = data["AAA"].index[60]
+    mb = MultiBacktester(build_strategy, {"short": [5, 10]})
+    summary = mb.run_independent(data, start=start)
+
+    reference = build_strategy()
+    for ticker, df in data.items():
+        bh = benchmark_metrics(
+            buy_and_hold(df, start=start, init_cash=reference.init_cash, **reference.cost_params)
+        )
+        rows = summary[summary["ticker"] == ticker]
+        assert (rows["bh_cagr"] == bh["cagr"]).all()
+        assert (rows["bh_max_drawdown"] == bh["max_drawdown"]).all()
+        np.testing.assert_allclose(rows["excess_cagr"], rows["cagr"] - bh["cagr"])
+
+    agg = mb.aggregate(summary)
+    for short, group in summary.groupby("short"):
+        row = agg[agg["short"] == short].iloc[0]
+        traded = group[(group["num_trades"] + group["open_trades"]) > 0]
+        assert row["beat_bh_ratio"] == pytest.approx((traded["excess_cagr"] > 0).mean())
+        assert row["excess_cagr_median"] == pytest.approx(traded["excess_cagr"].median())
+
+
+def test_run_independent_without_benchmark():
+    mb = MultiBacktester(build_strategy)
+    summary = mb.run_independent({"AAA": create_random_walk_df(seed=1)}, benchmark=False)
+    assert "bh_cagr" not in summary.columns
+    assert "beat_bh_ratio" not in mb.aggregate(summary).columns

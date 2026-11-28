@@ -5,6 +5,7 @@ import pandas_ta as ta  # noqa: F401
 
 from lib import report, setup_logging
 from lib.backtester import UNIT_SHARES, Backtester
+from lib.benchmark import BENCHMARK_TICKER, buy_and_hold, equal_weight_buy_and_hold
 from lib.multi_backtester import MultiBacktester, load_universe
 from lib.strategies.exits import (
     AtrStopLoss,
@@ -135,6 +136,13 @@ if __name__ == "__main__":
     sheet_tables["ByParams"] = by_params
     print("【パラメータごとの銘柄横断集計】")
     print(by_params.sort_values("sharpe_median", ascending=False))
+    # 銘柄ごとの買い持ちとの比較（#8）。beat_bh_ratio は、買い持ちより CAGR が高かった銘柄の割合
+    print("【パラメータごとの、銘柄ごとの買い持ちとの比較】")
+    print(
+        by_params[
+            [*PARAM_GRID, "cagr_median", "bh_cagr_median", "excess_cagr_median", "beat_bh_ratio"]
+        ].sort_values("excess_cagr_median", ascending=False)
+    )
 
     # 2'. パラメータ × 規模区分・業種で集計（特定の規模・業種だけで効いていないかを見る）
     for col in ["size", "sector"]:
@@ -155,6 +163,21 @@ if __name__ == "__main__":
     print("【資金共有モードの結果】")
     report.print_summary(portfolio)
     report.save_trades_csv(portfolio, "multi_portfolio_trades.csv")
+
+    # 3'. 買い持ちとの比較（#8）。同じ評価期間・初期資金・取引コストで、
+    # - ユニバースの等金額の買い持ち: 銘柄の選び方（生存者バイアスを含む）を除いた、戦略だけの差を見る
+    # - TOPIX 連動 ETF の買い持ち: 市場全体の追い風を除いても勝っているかを見る
+    reference = build_strategy()
+    bh_params = {"start": EVAL_START, "init_cash": reference.init_cash, **reference.cost_params}
+    benchmarks = {"ユニバース等金額 買い持ち": equal_weight_buy_and_hold(data, **bh_params)}
+    index_df = load_universe([BENCHMARK_TICKER], start="2010-01-01").get(BENCHMARK_TICKER)
+    if index_df is None:
+        logger.warning(f"{BENCHMARK_TICKER} のデータが取得できなかったため、比較から外しました。")
+    else:
+        benchmarks[f"{BENCHMARK_TICKER} 買い持ち"] = buy_and_hold(index_df, **bh_params)
+    comparison = report.print_benchmark_comparison(portfolio, benchmarks)
+    comparison.to_csv("multi_benchmark.csv")
+    sheet_tables["Benchmark"] = comparison.reset_index(names="metric")
 
     # 4. スプレッドシートへの出力（実行するたびに同じシートを上書きする）
     if not SAVE_TO_SHEET:

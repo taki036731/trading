@@ -92,3 +92,32 @@ def test_benchmark_table():
     assert table.index.tolist() == ACCOUNT_METRIC_COLUMNS
     assert table.columns.tolist() == ["strategy", "bench"]
     assert table.loc["total_return", "bench"] == pytest.approx(bench.total_return())
+
+
+def test_buy_and_hold_skips_rows_without_price():
+    """
+    評価期間の初日の始値が 0 や NaN の場合は、買える最初の行で買い、
+    途中の終値の 0・NaN は前の値で評価することをテスト（yfinance の売買のなかった日など）
+    """
+    df = create_random_walk_df(seed=1)
+    df.iloc[0, df.columns.get_loc("Open")] = 0.0
+    df.iloc[1, df.columns.get_loc("Open")] = np.nan
+    df.iloc[10, df.columns.get_loc("Close")] = np.nan
+    df.iloc[11, df.columns.get_loc("Close")] = 0.0
+    portfolio = buy_and_hold(df, slippage=SLIPPAGE)
+
+    assert portfolio.orders.records_readable["Timestamp"].tolist() == [df.index[2]]
+    assert portfolio.total_return() == pytest.approx(_hold_return(df.iloc[2:], slippage=SLIPPAGE))
+    value = portfolio.value()
+    assert not value.isna().any()
+    assert value.iloc[11] == pytest.approx(value.iloc[9])
+
+    multi = equal_weight_buy_and_hold({"A": df, "B": create_random_walk_df(seed=2)})
+    assert not multi.value().isna().any()
+
+
+def test_buy_and_hold_no_tradable_rows():
+    df = create_random_walk_df(seed=1)
+    df["Open"] = 0.0
+    with pytest.raises(ValueError, match="始値と終値が正の行"):
+        buy_and_hold(df)

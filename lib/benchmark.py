@@ -8,6 +8,7 @@
 - equal_weight_buy_and_hold: 複数銘柄を初期資金の等分で買って持ち続ける（ユニバース全体の買い持ち）
 
 買い持ちは、評価期間の初日の始値（スリッページ込み）で現金の全額を買い、最終日の終値で評価します（最後に売らない）。
+始値が 0 や NaN の行（売買のなかった日など）では買えないので、その場合は買える最初の行で買います。
 価格は戦略と同じ調整後価格なので、配当込みのリターンになります。
 100株単元はかけず、端株も買います（単元をかけると、値がさ株では使えない現金が残り、
 リターンが銘柄の値動きでなく現金の比率で変わってしまうため）。
@@ -34,6 +35,40 @@ def _eval_rows(df: pd.DataFrame, start: DateLike | None, end: DateLike | None) -
     return df.loc[period_mask(df.index, start, end)]
 
 
+def _first_tradable(rows: pd.DataFrame) -> pd.Timestamp:
+    """
+    始値と終値がどちらも有限で正の、最初の行の日時を返します。
+
+    yfinance のデータには、売買のなかった日などで始値が 0 や NaN の行があり、
+    その行では vectorbt が注文を受け付けない（ValueError）ため、買うのはこの行からにします。
+
+    Args:
+        rows (pd.DataFrame): 評価期間の行。
+
+    Returns:
+        pd.Timestamp: 買える最初の行の日時。
+
+    Raises:
+        ValueError: 評価期間に買える行がない場合。
+    """
+    tradable = (
+        np.isfinite(rows["Open"]) & (rows["Open"] > 0)
+        & np.isfinite(rows["Close"]) & (rows["Close"] > 0)
+    )
+    if not tradable.any():
+        raise ValueError("エラー: 評価期間に、始値と終値が正の行がありません。")
+    return pd.Timestamp(tradable.idxmax())
+
+
+def _close_for_valuation(close: pd.DataFrame | pd.Series) -> pd.DataFrame | pd.Series:
+    """
+    時価評価に使う終値を返します。0 以下と NaN を前の値で埋めます（過去方向のみ）。
+
+    終値が 0 や NaN の行があると、その日の評価額が 0 や NaN になり、最大ドローダウンなどが壊れるためです。
+    """
+    return close.where(close > 0).ffill()
+
+
 def buy_and_hold(
     df: pd.DataFrame,
     start: DateLike | None = None,
@@ -46,6 +81,7 @@ def buy_and_hold(
     1銘柄の買い持ちをシミュレーションします。
 
     評価期間の初日の始値で現金の全額を買い、最終日の終値で評価します。
+    始値か終値が 0・NaN の行では買えないので、その場合は買える最初の行で買います。
 
     Args:
         df (pd.DataFrame): Open / Close 列を持つ株価データ（調整後価格）。
@@ -63,9 +99,10 @@ def buy_and_hold(
     """
     rows = _eval_rows(df, start, end)
     size = pd.Series(np.nan, index=rows.index)
-    size.iloc[0] = np.inf  # 現金で買える全額
+    # 現金で買える全額。始値が 0 や NaN の行では買えないので、買える最初の行で買う
+    size.loc[_first_tradable(rows)] = np.inf
     return vbt.Portfolio.from_orders(
-        close=rows["Close"],
+        close=_close_for_valuation(rows["Close"]),
         price=rows["Open"],
         size=size,
         direction="longonly",
@@ -87,7 +124,8 @@ def equal_weight_buy_and_hold(
     """
     複数銘柄を初期資金の等分で買い、持ち続ける（リバランスなし）買い持ちをシミュレーションします。
 
-    1つの口座（資金共有）で、各銘柄の評価期間の初日の始値で init_cash / 銘柄数 ずつ買います。
+    1つの口座（資金共有）で、各銘柄の評価期間の初日（始値か終値が 0・NaN なら、買える最初の行）の始値で
+    init_cash / 銘柄数 ずつ買います。
     評価期間の途中で上場した銘柄の分は、上場日まで現金で持ちます。
     日付は全銘柄の和集合にそろえ、終値は時価評価のため前方埋めします（過去方向のみ）。
 
@@ -108,15 +146,15 @@ def equal_weight_buy_and_hold(
     if not data:
         raise ValueError("エラー: 銘柄データが空です。")
     rows = {ticker: _eval_rows(df, start, end) for ticker, df in data.items()}
-    close = pd.DataFrame({t: r["Close"] for t, r in rows.items()}).sort_index().ffill()
+    close = _close_for_valuation(pd.DataFrame({t: r["Close"] for t, r in rows.items()}).sort_index())
     price = pd.DataFrame({t: r["Open"] for t, r in rows.items()}).reindex(close.index)
 
-    # 各銘柄の最初の行だけに、買う金額を置く。vectorbt の size_type="value" はスリッページ前の価格で
+    # 各銘柄の買える最初の行だけに、買う金額を置く。vectorbt の size_type="value" はスリッページ前の価格で
     # 株数を決めるため、手数料とスリッページの分を差し引いて、各銘柄にちょうど等分の現金を使う
     per_ticker = init_cash / len(rows) / (1.0 + fees) / (1.0 + slippage)
     size = pd.DataFrame(np.nan, index=close.index, columns=close.columns)
     for ticker, r in rows.items():
-        size.loc[r.index[0], ticker] = per_ticker
+        size.loc[_first_tradable(r), ticker] = per_ticker
 
     return vbt.Portfolio.from_orders(
         close=close,

@@ -15,6 +15,7 @@ from lib.strategies.position_sizing import RiskPercentageSizer
 from lib.strategies.signals import (
     AbstractSignal,
     ATRConditionSignal,
+    ColumnAboveSignal,
     DeadCrossSignal,
     GoldenCrossSignal,
     InDateRangeSignal,
@@ -54,6 +55,7 @@ def _all_signals() -> list[AbstractSignal]:
         DeadCrossSignal(),
         ATRConditionSignal(lower=2.0, upper=2.4),
         InDateRangeSignal(datetime.datetime(2020, 3, 1), datetime.datetime(2020, 9, 30)),
+        ColumnAboveSignal("short_ma", "long_ma"),
     ]
 
 

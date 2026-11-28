@@ -1,4 +1,5 @@
 import logging
+from functools import partial
 
 import pandas as pd
 import pandas_ta as ta  # noqa: F401
@@ -11,10 +12,17 @@ from lib.strategies.exits import (
     AtrStopLoss,
     AtrTakeProfit,
 )
-from lib.strategies.indicators import ATRIndicator, MAIndicator
+from lib.strategies.indicators import (
+    AbstractIndicator,
+    ATRIndicator,
+    ExternalIndicator,
+    MAIndicator,
+)
 from lib.strategies.position_sizing import RiskPercentageSizer
 from lib.strategies.signals import (
+    AbstractSignal,
     ATRConditionSignal,
+    ColumnAboveSignal,
     DeadCrossSignal,
     GoldenCrossSignal,
 )
@@ -34,7 +42,17 @@ PARAM_GRID = {
     "short": [5, 10],
     "long": [20, 50],
     "tp_mult": [3, 4],
+    # 地合いフィルタ（TOPIX 連動 ETF の50日線 > 200日線の日だけ買う）の有無
+    "market_filter": [False, True],
 }
+
+# 地合いフィルタの参照元（lib.benchmark の TOPIX 連動 ETF）の移動平均の期間
+MARKET_SHORT = 50
+MARKET_LONG = 200
+# 参照元のデータを使い始める日。1306.T は 2015-01-05 に、戻らない -90% の足がある（#70 で警告だけにしている）。
+# その前後をまたぐと200日線が壊れるため、それより後のデータだけを使う。
+# 200日線が計算できるのは、ここから200営業日後（2015年10月ごろ）からで、それより前は買わない
+MARKET_DATA_FROM = "2015-01-06"
 
 # 評価期間の開始日。データはインジケーターのウォームアップのために、これより前から取得する（#38）
 EVAL_START = "2016-06-25"
@@ -51,7 +69,13 @@ SAVE_TO_SHEET = True
 SHEET_PREFIX = "Multi_"
 
 
-def build_strategy(short: int = 5, long: int = 20, tp_mult: float = 4) -> Backtester:
+def build_strategy(
+    short: int = 5,
+    long: int = 20,
+    tp_mult: float = 4,
+    market_filter: bool = False,
+    market_df: pd.DataFrame | None = None,
+) -> Backtester:
     """
     strategy01 の戦略を、パラメータを差し替えられる形で作ります。
 
@@ -59,16 +83,37 @@ def build_strategy(short: int = 5, long: int = 20, tp_mult: float = 4) -> Backte
         short (int): 短期 EMA の期間。
         long (int): 長期 EMA の期間。
         tp_mult (float): 利確幅の ATR 倍率。
+        market_filter (bool): True の場合、地合いフィルタ（参照元の MARKET_SHORT 日線 >
+            MARKET_LONG 日線の日だけ買う）をエントリーの条件に足します。決済には使いません。
+        market_df (pd.DataFrame | None): 地合いフィルタの参照元（TOPIX 連動 ETF）の株価データ。
 
     Returns:
         Backtester: 新しく作った Backtester。
+
+    Raises:
+        ValueError: market_filter が True なのに market_df がない場合。
     """
+    indicators: list[AbstractIndicator] = [MAIndicator("EMA", short, long), ATRIndicator(15)]
+    entries: list[AbstractSignal] = [
+        GoldenCrossSignal(),
+        ATRConditionSignal(lower=1.5, upper=5),
+    ]
+    if market_filter:
+        if market_df is None:
+            raise ValueError("エラー: 地合いフィルタを使うには、参照元の株価データ（market_df）が必要です。")
+        indicators.append(
+            ExternalIndicator(
+                market_df,
+                MAIndicator(
+                    "SMA", MARKET_SHORT, MARKET_LONG, short_col="mkt_short_ma", long_col="mkt_long_ma"
+                ),
+                name=BENCHMARK_TICKER,
+            )
+        )
+        entries.append(ColumnAboveSignal("mkt_short_ma", "mkt_long_ma"))
     return Backtester(
-        indicators=[MAIndicator("EMA", short, long), ATRIndicator(15)],
-        entries=[
-            GoldenCrossSignal(),
-            ATRConditionSignal(lower=1.5, upper=5),
-        ],
+        indicators=indicators,
+        entries=entries,
         exits=[DeadCrossSignal()],
         tp=AtrTakeProfit(tp_mult),
         sl=AtrStopLoss(2),
@@ -114,7 +159,14 @@ if __name__ == "__main__":
     data = load_universe(
         universe["ticker"], start="2010-01-01", data_from=data_from_map(universe)
     )
-    mb = MultiBacktester(build_strategy, PARAM_GRID)
+    # TOPIX 連動 ETF。地合いフィルタの参照元と、買い持ちの比較（3'）に使う
+    index_df = load_universe(
+        [BENCHMARK_TICKER], start="2010-01-01", data_from={BENCHMARK_TICKER: MARKET_DATA_FROM}
+    ).get(BENCHMARK_TICKER)
+    if index_df is None:
+        raise RuntimeError(f"{BENCHMARK_TICKER} のデータが取得できないため、地合いフィルタを検証できません。")
+    factory = partial(build_strategy, market_df=index_df)
+    mb = MultiBacktester(factory, PARAM_GRID)
 
     # 0. 初期資金に対する1単元の金額（高い銘柄はエントリー注文が捨てられやすい）
     init_cash = build_strategy().init_cash
@@ -160,11 +212,18 @@ if __name__ == "__main__":
     )
 
     # 3. 資金共有モード（strategy01 と同じパラメータで、全銘柄を1つの口座で運用）
+    portfolio_params = {"short": 5, "long": 20, "tp_mult": 4}
     portfolio = mb.run_portfolio(
-        data, params={"short": 5, "long": 20, "tp_mult": 4}, start=EVAL_START
+        data, params={**portfolio_params, "market_filter": False}, start=EVAL_START
+    )
+    # 地合いフィルタありの資金共有モード（3' の比較表に並べる）
+    filtered_portfolio = mb.run_portfolio(
+        data, params={**portfolio_params, "market_filter": True}, start=EVAL_START
     )
     print("【資金共有モードの結果】")
     report.print_summary(portfolio)
+    print("【資金共有モードの結果（地合いフィルタあり）】")
+    report.print_summary(filtered_portfolio)
     report.save_trades_csv(portfolio, "multi_portfolio_trades.csv")
 
     # 3'. 買い持ちとの比較（#8）。同じ評価期間・初期資金・取引コストで、
@@ -172,12 +231,11 @@ if __name__ == "__main__":
     # - TOPIX 連動 ETF の買い持ち: 市場全体の追い風を除いても勝っているかを見る
     reference = build_strategy()
     bh_params = {"start": EVAL_START, "init_cash": reference.init_cash, **reference.cost_params}
-    benchmarks = {"ユニバース等金額 買い持ち": equal_weight_buy_and_hold(data, **bh_params)}
-    index_df = load_universe([BENCHMARK_TICKER], start="2010-01-01").get(BENCHMARK_TICKER)
-    if index_df is None:
-        logger.warning(f"{BENCHMARK_TICKER} のデータが取得できなかったため、比較から外しました。")
-    else:
-        benchmarks[f"{BENCHMARK_TICKER} 買い持ち"] = buy_and_hold(index_df, **bh_params)
+    benchmarks = {
+        "strategy + 地合いフィルタ": filtered_portfolio,
+        "ユニバース等金額 買い持ち": equal_weight_buy_and_hold(data, **bh_params),
+        f"{BENCHMARK_TICKER} 買い持ち": buy_and_hold(index_df, **bh_params),
+    }
     comparison = report.print_benchmark_comparison(portfolio, benchmarks)
     comparison.to_csv("multi_benchmark.csv")
     sheet_tables["Benchmark"] = comparison.reset_index(names="metric")

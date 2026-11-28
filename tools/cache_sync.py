@@ -9,6 +9,7 @@
 データ用リポジトリ（DATA_REPO。環境変数 TRADING_DATA_REPO で変えられる）の、
 固定のタグ（RELEASE_TAG）のリリースに1つの zip（ASSET_NAME）として上書きで置きます。
 アップロード・ダウンロードには GitHub CLI（gh）を使います。手元の PC では `gh auth login` が必要です。
+データ用リポジトリは、README などのコミットが1つ以上必要です（空のリポジトリにはリリースを作れないため）。
 Codespaces では、devcontainer.json でデータ用リポジトリを読む権限を宣言しています
 （初めて Codespace を作るときに、権限の承認を求められます）。
 
@@ -123,6 +124,26 @@ def _gh(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["gh", *args], check=True, capture_output=True, text=True)
 
 
+def _create_release(repo: str) -> None:
+    """
+    リリースを作ります。タグにはコミットが必要なため、空のリポジトリでは作れません（GitHub の制約）。
+    """
+    try:
+        _gh(
+            "release", "create", RELEASE_TAG,
+            "--repo", repo,
+            "--title", "株価キャッシュ",
+            "--notes", "tools/cache_sync.py が上書きする、株価のキャッシュと JPX の一覧です。",
+        )  # fmt: skip
+    except subprocess.CalledProcessError as e:
+        if "Repository is empty" in (e.stderr or ""):
+            raise SystemExit(
+                f"{repo} にコミットが1つもないため、リリース（タグ）を作れません。"
+                "GitHub の画面で README などを1つ追加してから、もう一度実行してください。"
+            ) from None
+        raise
+
+
 def push(repo: str) -> None:
     """キャッシュを zip にまとめ、データ用リポジトリのリリースに上書きでアップロードします。"""
     with tempfile.TemporaryDirectory() as tmp:
@@ -132,12 +153,7 @@ def push(repo: str) -> None:
             _gh("release", "view", RELEASE_TAG, "--repo", repo)
         except subprocess.CalledProcessError:
             logger.info(f"{repo} にリリース {RELEASE_TAG} がないため作ります。")
-            _gh(
-                "release", "create", RELEASE_TAG,
-                "--repo", repo,
-                "--title", "株価キャッシュ",
-                "--notes", "tools/cache_sync.py が上書きする、株価のキャッシュと JPX の一覧です。",
-            )  # fmt: skip
+            _create_release(repo)
         _gh("release", "upload", RELEASE_TAG, zip_path, "--repo", repo, "--clobber")
         size_mb = os.path.getsize(zip_path) / 1e6
     logger.info(

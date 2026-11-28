@@ -65,3 +65,20 @@ def test_extract_archive_rejects_outside_paths(tmp_path, name):
     with pytest.raises(ValueError, match="展開できない"):
         extract_archive(str(zip_path), root=str(root), dirs=DIRS)
     assert not (root / "data" / "yfinance" / "ok.parquet").exists()
+
+
+def test_create_release_explains_empty_repository(monkeypatch):
+    """空のリポジトリでリリースを作れないときは、README を足すよう案内して止める"""
+    import subprocess
+
+    from tools import cache_sync
+
+    def fake_gh(*args):
+        raise subprocess.CalledProcessError(
+            1, ["gh", *args], stderr="HTTP 422: Validation Failed\nRepository is empty."
+        )
+
+    monkeypatch.setattr(cache_sync, "_gh", fake_gh)
+
+    with pytest.raises(SystemExit, match="README"):
+        cache_sync._create_release("owner/repo")

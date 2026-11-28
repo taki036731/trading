@@ -100,10 +100,10 @@ def test_buy_and_hold_skips_rows_without_price():
     途中の終値の 0・NaN は前の値で評価することをテスト（yfinance の売買のなかった日など）
     """
     df = create_random_walk_df(seed=1)
-    df.iloc[0, df.columns.get_loc("Open")] = 0.0
-    df.iloc[1, df.columns.get_loc("Open")] = np.nan
-    df.iloc[10, df.columns.get_loc("Close")] = np.nan
-    df.iloc[11, df.columns.get_loc("Close")] = 0.0
+    df.loc[df.index[0], "Open"] = 0.0
+    df.loc[df.index[1], "Open"] = np.nan
+    df.loc[df.index[10], "Close"] = np.nan
+    df.loc[df.index[11], "Close"] = 0.0
     portfolio = buy_and_hold(df, slippage=SLIPPAGE)
 
     assert portfolio.orders.records_readable["Timestamp"].tolist() == [df.index[2]]

@@ -35,9 +35,9 @@ def _eval_rows(df: pd.DataFrame, start: DateLike | None, end: DateLike | None) -
     return df.loc[period_mask(df.index, start, end)]
 
 
-def _first_tradable(rows: pd.DataFrame) -> pd.Timestamp:
+def _first_tradable(rows: pd.DataFrame) -> int:
     """
-    始値と終値がどちらも有限で正の、最初の行の日時を返します。
+    始値と終値がどちらも正の、最初の行の位置を返します。
 
     yfinance のデータには、売買のなかった日などで始値が 0 や NaN の行があり、
     その行では vectorbt が注文を受け付けない（ValueError）ため、買うのはこの行からにします。
@@ -46,27 +46,31 @@ def _first_tradable(rows: pd.DataFrame) -> pd.Timestamp:
         rows (pd.DataFrame): 評価期間の行。
 
     Returns:
-        pd.Timestamp: 買える最初の行の日時。
+        int: 買える最初の行の位置（0 始まり）。
 
     Raises:
         ValueError: 評価期間に買える行がない場合。
     """
-    tradable = (
-        np.isfinite(rows["Open"]) & (rows["Open"] > 0)
-        & np.isfinite(rows["Close"]) & (rows["Close"] > 0)
-    )
+    # NaN との比較は False になるので、NaN の行も買えない行になる
+    tradable = ((rows["Open"] > 0) & (rows["Close"] > 0)).to_numpy()
     if not tradable.any():
         raise ValueError("エラー: 評価期間に、始値と終値が正の行がありません。")
-    return pd.Timestamp(tradable.idxmax())
+    return int(np.argmax(tradable))
 
 
-def _close_for_valuation(close: pd.DataFrame | pd.Series) -> pd.DataFrame | pd.Series:
+def _close_for_valuation(close: pd.DataFrame) -> pd.DataFrame:
     """
     時価評価に使う終値を返します。0 以下と NaN を前の値で埋めます（過去方向のみ）。
 
     終値が 0 や NaN の行があると、その日の評価額が 0 や NaN になり、最大ドローダウンなどが壊れるためです。
+
+    Args:
+        close (pd.DataFrame): 終値（列=銘柄）。
+
+    Returns:
+        pd.DataFrame: 埋めた終値。
     """
-    return close.where(close > 0).ffill()
+    return close.mask(close <= 0).ffill()
 
 
 def buy_and_hold(
@@ -100,9 +104,9 @@ def buy_and_hold(
     rows = _eval_rows(df, start, end)
     size = pd.Series(np.nan, index=rows.index)
     # 現金で買える全額。始値が 0 や NaN の行では買えないので、買える最初の行で買う
-    size.loc[_first_tradable(rows)] = np.inf
+    size.iloc[_first_tradable(rows)] = np.inf
     return vbt.Portfolio.from_orders(
-        close=_close_for_valuation(rows["Close"]),
+        close=_close_for_valuation(rows[["Close"]])["Close"],
         price=rows["Open"],
         size=size,
         direction="longonly",
@@ -154,7 +158,7 @@ def equal_weight_buy_and_hold(
     per_ticker = init_cash / len(rows) / (1.0 + fees) / (1.0 + slippage)
     size = pd.DataFrame(np.nan, index=close.index, columns=close.columns)
     for ticker, r in rows.items():
-        size.loc[_first_tradable(r), ticker] = per_ticker
+        size.loc[r.index[_first_tradable(r)], ticker] = per_ticker
 
     return vbt.Portfolio.from_orders(
         close=close,

@@ -18,6 +18,16 @@
 				"shd101wyy.markdown-preview-enhanced",
 				"yzhang.markdown-all-in-one"
 			]
+		},
+		// 株価のキャッシュを置く private のデータ用リポジトリを読む権限（tools/cache_sync.py pull で使う。#66）
+		"codespaces": {
+			"repositories": {
+				"taki036731/trading-data": {
+					"permissions": {
+						"contents": "read"
+					}
+				}
+			}
 		}
 	},
 

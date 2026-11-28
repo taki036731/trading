@@ -453,7 +453,7 @@ def test_load_universe_skips_failed_tickers(monkeypatch, caplog):
     """
     df = create_random_walk_df(seed=1)
 
-    def fake_fetch(ticker, start=None, end=None, source=None):
+    def fake_fetch(ticker, start=None, end=None, source=None, **kwargs):
         if ticker == "ERR.T":
             raise ConnectionError("network")
         if ticker == "EMPTY.T":
@@ -467,3 +467,23 @@ def test_load_universe_skips_failed_tickers(monkeypatch, caplog):
     assert list(data) == ["AAA.T", "BBB.T"]
     assert "4 銘柄のうち 2 銘柄" in caplog.text
     assert "ERR.T" in caplog.text and "EMPTY.T" in caplog.text
+
+
+def test_load_universe_passes_mode_and_logs_last_dates(monkeypatch, caplog):
+    """
+    取得モードと有効期限を fetch_stock_data に渡し、データの最終日の範囲をログに出すことをテスト
+    """
+    df = create_random_walk_df(seed=1)
+    calls = []
+
+    def fake_fetch(ticker, start=None, end=None, source=None, **kwargs):
+        calls.append(kwargs)
+        return df.iloc[:-5] if ticker == "OLD.T" else df
+
+    monkeypatch.setattr(multi_backtester.dl, "fetch_stock_data", fake_fetch)
+    with caplog.at_level(logging.INFO, logger="lib.multi_backtester"):
+        load_universe(["OLD.T", "NEW.T"], mode="offline", max_age_days=3)
+
+    assert calls == [{"mode": "offline", "max_age_days": 3}] * 2
+    assert f"最古 {df.index[-6]:%Y-%m-%d}（OLD.T）" in caplog.text
+    assert f"最新 {df.index[-1]:%Y-%m-%d}（NEW.T）" in caplog.text

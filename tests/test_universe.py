@@ -1,3 +1,6 @@
+import os
+
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -12,7 +15,9 @@ from lib.universe import (
 from tools.build_universe import (
     SIZE_QUOTAS,
     SOURCE_PATH,
+    SOURCE_COLUMNS,
     build_universe,
+    convert_jpx_excel,
     load_jpx_list,
     stratified_sample,
 )
@@ -87,6 +92,10 @@ def test_stratified_sample_follows_sector_ratio():
     assert sample["code"].tolist() == stratified_sample(stocks, 10, seed=0)["code"].tolist()
 
 
+@pytest.mark.skipif(
+    not os.path.exists(SOURCE_PATH),
+    reason="JPX の一覧は public のリポジトリに置けないため、ない環境（CI など）ではスキップする（#66）",
+)
 def test_committed_universe_matches_builder():
     """
     commit 済みのユニバースが、tools/build_universe.py の今の設定で作り直したものと一致することをテスト
@@ -97,3 +106,44 @@ def test_committed_universe_matches_builder():
 
     assert len(universe) == sum(SIZE_QUOTAS.values())
     pd.testing.assert_frame_equal(universe, rebuilt.astype(str))
+
+
+def test_convert_jpx_excel_matches_csv_format(tmp_path):
+    """
+    JPX の一覧の Excel を、これまで手で変換した CSV と同じ文字列にすることをテスト
+    （数値のセルは '50'、'-' や空のセルはそのまま・空文字）
+    """
+    excel = pd.DataFrame(
+        {
+            "日付": [20261031, 20261031],
+            "コード": [1301, "130A"],
+            "銘柄名": ["極洋", "ｉＦｒｅｅＥＴＦ"],
+            "市場・商品区分": ["プライム（内国株式）", "ETF・ETN"],
+            "33業種コード": [50.0, "-"],
+            "33業種区分": ["水産・農林業", "-"],
+            "規模コード": [6, np.nan],
+            "規模区分": ["TOPIX Small 1", "-"],
+        }
+    )
+    path = tmp_path / "data_j.xlsx"
+    excel.to_excel(path, index=False, engine="openpyxl")
+
+    df = convert_jpx_excel(path.read_bytes())
+
+    assert df.loc[0, "日付"] == "20261031"
+    assert df["コード"].tolist() == ["1301", "130A"]
+    assert df["33業種コード"].tolist() == ["50", "-"]
+    assert df["規模コード"].tolist() == ["6", ""]
+    # 変換した CSV を、ユニバースを作るときと同じ方法で読める
+    csv = tmp_path / "data_j.csv"
+    df.to_csv(csv, index=False, encoding="utf-8")
+    assert list(load_jpx_list(str(csv)).columns) == list(SOURCE_COLUMNS.values())
+
+
+def test_convert_jpx_excel_rejects_missing_columns(tmp_path):
+    """必要な列がない Excel（形式が変わった場合など）はエラーにする"""
+    path = tmp_path / "data_j.xlsx"
+    pd.DataFrame({"コード": [1301]}).to_excel(path, index=False, engine="openpyxl")
+
+    with pytest.raises(ValueError, match="銘柄名"):
+        convert_jpx_excel(path.read_bytes())

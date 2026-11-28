@@ -5,3 +5,5 @@ __pycache__
 cread/*
 # ユニバースの CSV は Git で管理する（#13）
 !universes/**/*.csv
+# JPX の一覧の原本は、利用規約で再配信が禁じられているため Git で管理しない（#66。tools/cache_sync.py で共有する）
+universes/source/

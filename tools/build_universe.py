@@ -2,9 +2,16 @@
 JPX の「東証上場銘柄一覧」から、業種・規模で層化して銘柄を選び、ユニバースの CSV を作ります（#13）。
 
 使い方:
-    python -m tools.build_universe
+    python -m tools.build_universe             # SOURCE_PATH の一覧からユニバースを作る
+    python -m tools.build_universe --download  # JPX から最新の一覧をダウンロードして CSV にする（#66）
 
-入力は JPX が公開している一覧（data_j.xls）を UTF-8 の CSV に変換したもの（SOURCE_PATH）です。
+入力は JPX が公開している一覧（data_j.xlsx）を UTF-8 の CSV に変換したもの（SOURCE_PATH）です。
+一覧は毎月第3営業日に前月末の版に差し替わります。`--download` は、それを
+`universes/source/data_j_<一覧の日付>.csv` に保存するだけで、ユニバースは作り直しません
+（新しい一覧で作り直すときは、SOURCE_PATH を書き換えてから実行し、ユニバースを commit します）。
+JPX の利用規約は、一覧の許諾のない二次利用・再配信を禁じているため、一覧（universes/source/）は
+このリポジトリ（public）には commit せず、tools/cache_sync.py で private のデータ用リポジトリと共有します。
+規約は高頻度の自動取得も控えるよう求めているので、ダウンロードは手動で月1回程度にとどめます。
 対象は TOPIX の構成銘柄（規模区分のある銘柄）で、規模区分ごとに SIZE_QUOTAS の数を選びます。
 規模区分の中では、銘柄を固定の乱数シードで並べ替えてから33業種の順に並べ、等間隔に選ぶので、
 業種の構成比がおおよそ元の一覧と同じになります。同じ入力とシードなら、同じ銘柄が選ばれます。
@@ -12,18 +19,28 @@ JPX の「東証上場銘柄一覧」から、業種・規模で層化して銘�
 一覧は作成した日に上場している銘柄だけなので、このユニバースには生存者バイアスがあります。
 """
 
+import argparse
+import io
 import logging
 import os
 
 import numpy as np
 import pandas as pd
+import requests
 
 from lib import setup_logging
 from lib.universe import UNIVERSE_COLUMNS, universe_path
 
 logger = logging.getLogger("tools.build_universe")
 
-SOURCE_PATH = os.path.join("universes", "source", "data_j_20261031.csv")
+SOURCE_DIR = os.path.join("universes", "source")
+SOURCE_PATH = os.path.join(SOURCE_DIR, "data_j_20261031.csv")
+# JPX の「東証上場銘柄一覧」のページ（https://www.jpx.co.jp/markets/statistics-equities/misc/01.html）の Excel。
+# リンクが変わってダウンロードできなくなったら、ページで確認して書き換える
+JPX_LIST_URL = (
+    "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xlsx"
+)
+DOWNLOAD_TIMEOUT = 60
 UNIVERSE_NAME = "jpx_stratified_100"
 SEED = 13
 
@@ -105,8 +122,86 @@ def build_universe(source: pd.DataFrame, quotas: dict[str, int], seed: int) -> p
     return universe[[*UNIVERSE_COLUMNS, "market", "listed_as_of"]].reset_index(drop=True)
 
 
+def _to_text(value: object) -> str:
+    """Excel のセルの値を、CSV と同じ文字列にします（整数の 50.0 は '50'、空のセルは ''）。"""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def convert_jpx_excel(content: bytes) -> pd.DataFrame:
+    """
+    JPX の一覧の Excel（data_j.xlsx）を、load_jpx_list で読める表（全て文字列）にします。
+
+    Args:
+        content (bytes): Excel ファイルの中身。
+
+    Returns:
+        pd.DataFrame: 列は Excel のまま（日付, コード, 銘柄名, ...）。
+
+    Raises:
+        ValueError: 必要な列（SOURCE_COLUMNS のキー）がない場合。
+    """
+    df = pd.read_excel(io.BytesIO(content), dtype=object, engine="openpyxl")
+    df.columns = [str(c).strip() for c in df.columns]
+    missing = [c for c in SOURCE_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(f"JPX の一覧に必要な列がありません: {missing}（列: {list(df.columns)}）")
+    return df.map(_to_text)
+
+
+def download_jpx_list(url: str = JPX_LIST_URL, out_dir: str = SOURCE_DIR) -> str:
+    """
+    JPX の一覧をダウンロードし、`<out_dir>/data_j_<一覧の日付>.csv`（UTF-8）に保存します。
+
+    Args:
+        url (str, optional): 一覧の Excel の URL。
+        out_dir (str, optional): 保存先のフォルダ。
+
+    Returns:
+        str: 保存した CSV のパス。
+    """
+    response = requests.get(url, timeout=DOWNLOAD_TIMEOUT)
+    response.raise_for_status()
+    df = convert_jpx_excel(response.content)
+
+    dates = df["日付"].unique()
+    if len(dates) != 1:
+        raise ValueError(f"JPX の一覧の日付が1つではありません: {list(dates)}")
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"data_j_{dates[0]}.csv")
+    df.to_csv(path, index=False, encoding="utf-8")
+    return path
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[1] if __doc__ else None)
+    parser.add_argument(
+        "--download",
+        action="store_true",
+        help="JPX から最新の一覧をダウンロードして universes/source/ に保存する（ユニバースは作り直さない）",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
     setup_logging()
+    args = _parse_args()
+    if args.download:
+        saved = download_jpx_list()
+        logger.info(
+            f"JPX の一覧を {saved} に保存しました。"
+            "この一覧でユニバースを作り直すときは、SOURCE_PATH を書き換えてから実行してください。"
+        )
+        raise SystemExit(0)
+
+    if not os.path.exists(SOURCE_PATH):
+        raise SystemExit(
+            f"一覧 {SOURCE_PATH} がありません。"
+            "`python -m tools.cache_sync pull` で取得するか、`--download` でダウンロードしてください。"
+        )
     source = load_jpx_list(SOURCE_PATH)
     universe = build_universe(source, SIZE_QUOTAS, SEED)
 

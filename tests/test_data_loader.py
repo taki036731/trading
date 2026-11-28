@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -42,10 +44,33 @@ class FakeSource(AbstractPriceSource):
         return self.full.loc[start:].copy()
 
 
+@pytest.fixture(autouse=True)
+def clear_mode_env(monkeypatch):
+    """手元で環境変数を設定していても、テストの結果が変わらないようにする"""
+    monkeypatch.delenv(dl.DATA_MODE_ENV, raising=False)
+    monkeypatch.delenv(dl.MAX_AGE_ENV, raising=False)
+
+
 @pytest.fixture
 def cache_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(dl, "CACHE_DIR", str(tmp_path))
     return tmp_path
+
+
+class FailingSource(FakeSource):
+    """取得元への問い合わせが必ず失敗する（通信エラーや利用制限の代わり）"""
+
+    def _fetch(self, ticker: str, start: str | None = None) -> pd.DataFrame:
+        self.calls.append(start)
+        raise ConnectionError("network")
+
+
+def set_now(monkeypatch, now: str) -> None:
+    monkeypatch.setattr(dl, "_now", lambda: datetime.fromisoformat(now))
+
+
+def meta_path(cache_dir, ticker: str):
+    return cache_dir / "fake" / f"{ticker}{dl.META_SUFFIX}"
 
 
 def write_cache(cache_dir, ticker: str, df: pd.DataFrame) -> None:
@@ -201,3 +226,138 @@ def test_to_adjusted_with_raw_restores_pre_split_price():
     ratio = raw["Adj Close"] / raw["Close"]
     np.testing.assert_allclose(df["Open"].to_numpy(), (raw["Open"] * ratio).to_numpy())
     np.testing.assert_allclose(df["Close"].to_numpy(), raw["Adj Close"].to_numpy())
+
+
+def test_auto_skips_source_within_max_age(cache_dir, monkeypatch):
+    """auto では、最後の取得から有効期限内なら取得元に問い合わせず、キャッシュをそのまま返す"""
+    full = make_prices("2024-01-01", 30)
+    fake = FakeSource(full.iloc[:20])
+    set_now(monkeypatch, "2024-02-01T10:00:00")
+    dl.fetch_stock_data("TEST", source=fake)
+    assert fake.calls == [None]
+    assert meta_path(cache_dir, "TEST").exists()
+
+    # 取得元のデータが増えても、7日以内なら問い合わせない
+    fake.full = full
+    set_now(monkeypatch, "2024-02-08T09:59:00")
+    df = dl.fetch_stock_data("TEST", source=fake)
+
+    assert fake.calls == [None]
+    pd.testing.assert_frame_equal(df, full.iloc[:20], check_freq=False)
+
+
+def test_auto_updates_after_max_age(cache_dir, monkeypatch):
+    """auto では、有効期限を過ぎていれば差分取得して、最終取得時刻を更新する"""
+    full = make_prices("2024-01-01", 30)
+    fake = FakeSource(full.iloc[:20])
+    set_now(monkeypatch, "2024-02-01T10:00:00")
+    dl.fetch_stock_data("TEST", source=fake)
+
+    fake.full = full
+    set_now(monkeypatch, "2024-02-08T10:00:00")
+    df = dl.fetch_stock_data("TEST", source=fake)
+
+    assert len(fake.calls) == 2 and fake.calls[-1] is not None
+    pd.testing.assert_frame_equal(df, full, check_freq=False)
+    assert "2024-02-08T10:00:00" in meta_path(cache_dir, "TEST").read_text()
+
+
+def test_max_age_from_env(cache_dir, monkeypatch):
+    """有効期限は環境変数で変えられる（0 なら毎回問い合わせる）"""
+    full = make_prices("2024-01-01", 20)
+    fake = FakeSource(full)
+    dl.fetch_stock_data("TEST", source=fake)
+    monkeypatch.setenv(dl.MAX_AGE_ENV, "0")
+
+    dl.fetch_stock_data("TEST", source=fake)
+
+    assert len(fake.calls) == 2
+
+
+def test_cache_without_meta_is_treated_as_expired(cache_dir):
+    """メタ情報のない既存のキャッシュは期限切れとして扱い、差分取得する"""
+    full = make_prices("2024-01-01", 30)
+    write_cache(cache_dir, "TEST", full.iloc[:20])
+    fake = FakeSource(full)
+
+    dl.fetch_stock_data("TEST", source=fake)
+
+    assert len(fake.calls) == 1 and fake.calls[0] is not None
+    assert meta_path(cache_dir, "TEST").exists()
+
+
+def test_auto_falls_back_to_cache_when_source_fails(cache_dir, caplog):
+    """auto で取得元からの取得に失敗したら、古いキャッシュを使って警告する。最終取得時刻は更新しない"""
+    full = make_prices("2024-01-01", 20)
+    write_cache(cache_dir, "TEST", full)
+    fake = FailingSource(full)
+
+    df = dl.fetch_stock_data("TEST", source=fake)
+
+    assert len(fake.calls) == 1
+    pd.testing.assert_frame_equal(df, full, check_freq=False)
+    assert "キャッシュを使います" in caplog.text
+    assert not meta_path(cache_dir, "TEST").exists()
+
+
+def test_auto_raises_when_source_fails_without_cache(cache_dir):
+    """キャッシュがなく取得にも失敗したら、例外をそのまま出す"""
+    with pytest.raises(ConnectionError):
+        dl.fetch_stock_data("TEST", source=FailingSource(make_prices("2024-01-01", 5)))
+
+
+def test_offline_never_calls_source(cache_dir):
+    """offline では、メタ情報がなく期限切れでも取得元に問い合わせず、キャッシュを返す"""
+    full = make_prices("2024-01-01", 20)
+    write_cache(cache_dir, "TEST", full)
+    fake = FailingSource(full)
+
+    df = dl.fetch_stock_data("TEST", source=fake, mode="offline", start="2024-01-10")
+
+    assert fake.calls == []
+    pd.testing.assert_frame_equal(df, full.loc["2024-01-10":], check_freq=False)
+
+
+def test_offline_from_env_raises_without_cache(cache_dir, monkeypatch):
+    """環境変数で offline にでき、キャッシュがなければ FileNotFoundError にする"""
+    monkeypatch.setenv(dl.DATA_MODE_ENV, "offline")
+    fake = FakeSource(make_prices("2024-01-01", 5))
+
+    with pytest.raises(FileNotFoundError, match="オフライン"):
+        dl.fetch_stock_data("TEST", source=fake)
+    assert fake.calls == []
+
+
+def test_mode_refresh_fetches_full_history_even_if_fresh(cache_dir):
+    """refresh では、有効期限内でも全期間を取り直す"""
+    full = make_prices("2024-01-01", 20)
+    fake = FakeSource(full)
+    dl.fetch_stock_data("TEST", source=fake)
+
+    dl.fetch_stock_data("TEST", source=fake, mode="refresh")
+
+    assert fake.calls == [None, None]
+
+
+def test_resolve_data_mode_priority(monkeypatch):
+    """refresh=True、引数、環境変数、既定値の順に優先し、不正な値はエラーにする"""
+    assert dl.resolve_data_mode() == "auto"
+    monkeypatch.setenv(dl.DATA_MODE_ENV, "Offline")
+    assert dl.resolve_data_mode() == "offline"
+    assert dl.resolve_data_mode("auto") == "auto"
+    assert dl.resolve_data_mode("offline", refresh=True) == "refresh"
+    monkeypatch.setenv(dl.DATA_MODE_ENV, "online")
+    with pytest.raises(ValueError, match="online"):
+        dl.resolve_data_mode()
+
+
+def test_broken_meta_is_treated_as_expired(cache_dir):
+    """メタ情報が壊れていても止まらず、期限切れとして扱う"""
+    full = make_prices("2024-01-01", 20)
+    write_cache(cache_dir, "TEST", full)
+    meta_path(cache_dir, "TEST").write_text("not json")
+    fake = FakeSource(full)
+
+    dl.fetch_stock_data("TEST", source=fake)
+
+    assert len(fake.calls) == 1

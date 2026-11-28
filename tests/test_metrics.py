@@ -3,6 +3,7 @@ from typing import cast
 import numpy as np
 import pandas as pd
 import pytest
+from vectorbt.portfolio.trades import Positions
 
 from lib.backtester import Backtester
 from lib.metrics import calc_metrics, closed_and_open_trades, portfolio_stats, year_freq
@@ -171,3 +172,15 @@ def test_aggregate_counts_ticker_with_only_open_trade():
     assert row["win_rate_median"] == pytest.approx(summary["win_rate"].iloc[1])
     assert row["total_trades"] == 1
     assert row["total_open_trades"] == 2
+
+
+def test_exposure_matches_coverage_without_split_bars():
+    """
+    1銘柄で足を分けない場合、exposure は vectorbt の positions.coverage()（行数ベース）と一致することをテスト
+    """
+    df = create_random_walk_df(days=1000, seed=4)
+    pf = build_strategy().run(df.copy())
+    assert len(pf.wrapper.index) == len(df), "足を分けないデータでテストする"
+    # vectorbt の cached_property を Pylance が関数と見なすため、実際の型を明示する
+    positions = cast(Positions, pf.positions)
+    assert calc_metrics(pf)["exposure"] == pytest.approx(positions.coverage())

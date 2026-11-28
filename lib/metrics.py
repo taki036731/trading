@@ -6,7 +6,7 @@ import pandas as pd
 import vectorbt as vbt
 from vectorbt.portfolio.enums import OrderStatus, OrderStatusInfo
 from vectorbt.portfolio.logs import Logs
-from vectorbt.portfolio.trades import Positions, Trades
+from vectorbt.portfolio.trades import Trades
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,7 @@ METRIC_COLUMNS = [
     "expectancy",
     "avg_trade_return",
     "exposure",
+    "avg_gross_exposure",
     "entry_orders",
     "entry_dropped",
     "entry_fill_rate",
@@ -210,6 +211,7 @@ def calc_metrics(portfolio: vbt.Portfolio) -> dict[str, float]:
     データの終了日を変えるだけで値が変わるためです（portfolio_stats の Win Rate なども決済済みだけ）。
     保有中のトレードの件数は open_trades に出します。
     total_return / cagr / sharpe / exposure などの口座単位の指標は、含み損益を含みます。
+    exposure / avg_gross_exposure は、日付ごとの終値時点で計算します（exposure_metrics を参照）。
 
     Args:
         portfolio (vbt.Portfolio): 単一銘柄（または資金共有でグループ化済み）の Portfolio。
@@ -218,8 +220,6 @@ def calc_metrics(portfolio: vbt.Portfolio) -> dict[str, float]:
         dict[str, float]: METRIC_COLUMNS をキーとする指標の辞書。
     """
     trades, open_trades = closed_and_open_trades(portfolio)
-    # vectorbt の cached_property を Pylance が関数と見なすため、実際の型を明示する
-    positions = cast(Positions, portfolio.positions)
     num_trades = int(trades.count())
     # trades.returns などは、vectorbt がクラスの定義時に追加する属性で、Pylance からは見えない
     return {
@@ -230,8 +230,43 @@ def calc_metrics(portfolio: vbt.Portfolio) -> dict[str, float]:
         "profit_factor": float(trades.profit_factor()) if num_trades else np.nan,
         "expectancy": float(trades.expectancy()) if num_trades else np.nan,
         "avg_trade_return": float(trades.returns.mean()) if num_trades else np.nan,  # pyright: ignore[reportAttributeAccessIssue]
-        "exposure": float(positions.coverage()),
+        **exposure_metrics(portfolio),
         **_entry_metrics(portfolio),
+    }
+
+
+def _daily_close_mean(series: pd.Series) -> float:
+    """
+    日付ごとの最後の行（その日の終値時点）だけで、Series の平均を返します。
+    足を分けた 12:00 の行があれば、その行がその日の値になります。
+    """
+    index = pd.DatetimeIndex(series.index)
+    return float(series.astype(float).groupby(index.normalize()).last().mean())
+
+
+def exposure_metrics(portfolio: vbt.Portfolio) -> dict[str, float]:
+    """
+    口座が株を保有していた日の割合と、資産に対する保有額の平均の割合を、日付ごとの終値時点で計算します。
+
+    vectorbt の positions.coverage() は行数ベースで、グループ化した Portfolio（資金共有モード）では
+    分母が「銘柄数 × 行数」になるため、値が銘柄数で割られてしまいます（#68）。また、足を2行に分けた日
+    （エントリー当日の SL/TP 判定や資金共有モード）は2回数えられます。そのため、日付ごとの最後の行
+    （その日の終値時点）だけで数えます。エントリー当日に決済した日は、終値時点で保有していないので数えません。
+
+    Args:
+        portfolio (vbt.Portfolio): 単一銘柄（または資金共有でグループ化済み）の Portfolio。
+
+    Returns:
+        dict[str, float]: 次の2つの指標。
+            - exposure: 終値時点でどれかの銘柄を保有していた日数 ÷ 評価期間の日数
+            - avg_gross_exposure: 終値時点の「保有額 ÷ 資産」（gross_exposure）の、評価期間の日ごとの平均
+    """
+    # assets() はグループ化していても銘柄ごとの列で返る。1銘柄なら Series
+    assets = portfolio.assets()
+    held = assets.ne(0).any(axis=1) if isinstance(assets, pd.DataFrame) else assets.ne(0)
+    return {
+        "exposure": _daily_close_mean(held),
+        "avg_gross_exposure": _daily_close_mean(cast(pd.Series, portfolio.gross_exposure())),
     }
 
 

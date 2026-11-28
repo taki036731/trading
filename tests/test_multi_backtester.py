@@ -285,6 +285,51 @@ def test_run_portfolio_single_ticker_matches_backtester_with_split_bars():
     assert_same_daily_result(actual, expected)
 
 
+def test_run_portfolio_exposure_counts_days_held_by_any_ticker():
+    """
+    資金共有モードの exposure が、銘柄数で割られずに「どれかの銘柄を終値時点で保有していた日の割合」になることをテスト（#68）
+    """
+    # AAA は 1日目のクロスで 2日目にエントリーし、最後まで保有する。BBB は一度もエントリーしない
+    data = {"AAA": golden_cross_df(1), "BBB": create_base_df(days=30)}
+    pf = MultiBacktester(build_manual_strategy).run_portfolio(data)
+    assert pf.trades.records_readable["Status"].tolist() == ["Open"], "AAA だけが最後まで保有するデータでテストする"
+
+    metrics = calc_metrics(pf)
+
+    assert metrics["exposure"] == pytest.approx(28 / 30)
+    # vectorbt の coverage() は「銘柄数 × 行数」で割るため、半分以下になる
+    assert pf.positions.coverage() < 0.5
+
+
+def test_run_portfolio_avg_gross_exposure_is_mean_of_daily_close_ratio():
+    """
+    avg_gross_exposure が、日付ごとの終値時点の「全銘柄の保有額の合計 ÷ 資産」の平均になることをテスト
+    """
+    data = {f"T{i}": create_random_walk_df(days=500, seed=20 + i) for i in range(3)}
+    pf = MultiBacktester(build_narrow_stop_strategy).run_portfolio(data)
+    assert len(pf.wrapper.index) > 500, "足を分ける日が出るデータでテストする"
+
+    ratio = pf.asset_value(group_by=False).sum(axis=1) / pf.value()
+    expected = ratio.groupby(pd.DatetimeIndex(ratio.index).normalize()).last().mean()
+    metrics = calc_metrics(pf)
+    assert 0 < metrics["avg_gross_exposure"] < 1
+    assert metrics["avg_gross_exposure"] == pytest.approx(expected)
+
+
+def test_exposure_does_not_depend_on_split_bars():
+    """
+    足の分け方が違っても（独立モードと資金共有モードの1銘柄）、exposure / avg_gross_exposure が同じになることをテスト
+    """
+    df = create_random_walk_df(days=500, seed=3)
+    single = build_narrow_stop_strategy().run(df.copy())
+    shared = MultiBacktester(build_narrow_stop_strategy).run_portfolio({"AAA": df})
+    assert len(shared.wrapper.index) > len(single.wrapper.index) > len(df), "足の分け方が違うデータでテストする"
+
+    expected, actual = calc_metrics(single), calc_metrics(shared)
+    assert actual["exposure"] == pytest.approx(expected["exposure"])
+    assert actual["avg_gross_exposure"] == pytest.approx(expected["avg_gross_exposure"])
+
+
 def test_run_portfolio_stops_on_entry_day():
     """
     資金共有モードでも、エントリー当日に SL ラインを割った銘柄はその日のうちに決済されることをテスト。

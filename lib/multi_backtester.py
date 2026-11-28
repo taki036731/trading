@@ -1,6 +1,6 @@
 import itertools
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 import numpy as np
@@ -34,6 +34,7 @@ def load_universe(
     source: AbstractPriceSource | None = None,
     mode: dl.DataMode | None = None,
     max_age_days: float | None = None,
+    data_from: Mapping[str, str] | None = None,
 ) -> dict[str, pd.DataFrame]:
     """
     複数銘柄の株価データをまとめて取得します。
@@ -49,6 +50,9 @@ def load_universe(
         source (AbstractPriceSource, optional): 株価データの取得元。デフォルトは None（YFinanceSource）。
         mode (DataMode, optional): 取得モード（'auto' / 'offline' / 'refresh'）。fetch_stock_data に渡します。
         max_age_days (float, optional): auto のときのキャッシュの有効期限（日数）。fetch_stock_data に渡します。
+        data_from (Mapping[str, str], optional): 銘柄ごとに、データを使い始める日（'YYYY-MM-DD'）。
+            start より後なら、その銘柄はこの日から取得します（上場前の壊れたデータを使わないため。#70）。
+            ユニバースの data_from 列から lib.universe.data_from_map で作ります。
 
     Returns:
         dict[str, pd.DataFrame]: ティッカーをキー、株価データを値とする辞書（指定順を保持）。
@@ -56,11 +60,13 @@ def load_universe(
     """
     data: dict[str, pd.DataFrame] = {}
     skipped: list[str] = []
+    data_from = data_from or {}
     for ticker in tickers:
+        ticker_start = _later_date(start, data_from.get(ticker))
         try:
             df = dl.fetch_stock_data(
                 ticker,
-                start=start,
+                start=ticker_start,
                 end=end,
                 source=source,
                 mode=mode,
@@ -90,6 +96,15 @@ def load_universe(
             f"最新 {last_dates.max():%Y-%m-%d}（{last_dates.idxmax()}）"
         )
     return data
+
+
+def _later_date(start: str | None, data_from: str | None) -> str | None:
+    """start と data_from の遅い方の日付（'YYYY-MM-DD'）を返します。どちらも None なら None。"""
+    if not data_from:
+        return start
+    if start is None or pd.Timestamp(data_from) > pd.Timestamp(start):
+        return pd.Timestamp(data_from).strftime("%Y-%m-%d")
+    return start
 
 
 def expand_param_grid(param_grid: dict[str, list] | None) -> list[dict[str, Any]]:

@@ -29,7 +29,7 @@ import pandas as pd
 import requests
 
 from lib import setup_logging
-from lib.universe import UNIVERSE_COLUMNS, universe_path
+from lib.universe import DATA_FROM_COLUMN, UNIVERSE_COLUMNS, universe_path
 
 logger = logging.getLogger("tools.build_universe")
 
@@ -51,6 +51,12 @@ SIZE_QUOTAS = {
     "TOPIX Mid400": 30,
     "TOPIX Small 1": 25,
     "TOPIX Small 2": 20,
+}
+
+# 銘柄ごとにデータを使い始める日（ユニバースの data_from 列。#70）。
+# 上場前の期間に、yfinance のデータが壊れている（価格がマイナスなど）銘柄で、上場日を入れる
+DATA_FROM_OVERRIDES = {
+    "8919.T": "2017-12-12",  # カチタス。2017-12-12 上場。それより前は別のデータ（価格がマイナスの日がある）
 }
 
 # JPX の一覧の列名 → ユニバースの列名
@@ -110,7 +116,8 @@ def build_universe(source: pd.DataFrame, quotas: dict[str, int], seed: int) -> p
         seed (int): 乱数シード。
 
     Returns:
-        pd.DataFrame: ユニバース。列は UNIVERSE_COLUMNS と market / listed_as_of。
+        pd.DataFrame: ユニバース。列は UNIVERSE_COLUMNS と market / listed_as_of / data_from
+            （DATA_FROM_OVERRIDES にない銘柄は空）。
             並びは quotas の規模区分の順、その中は業種の順。
     """
     stocks = source[source["size"].isin(list(quotas))]
@@ -119,7 +126,11 @@ def build_universe(source: pd.DataFrame, quotas: dict[str, int], seed: int) -> p
     ]
     universe = pd.concat(parts)
     universe = universe.assign(ticker=universe["code"] + ".T")
-    return universe[[*UNIVERSE_COLUMNS, "market", "listed_as_of"]].reset_index(drop=True)
+    universe = universe.assign(
+        **{DATA_FROM_COLUMN: universe["ticker"].map(DATA_FROM_OVERRIDES).fillna("")}
+    )
+    columns = [*UNIVERSE_COLUMNS, "market", "listed_as_of", DATA_FROM_COLUMN]
+    return universe[columns].reset_index(drop=True)
 
 
 def _to_text(value: object) -> str:

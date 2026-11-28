@@ -7,6 +7,7 @@ from typing import Literal, cast, get_args
 import numpy as np
 import pandas as pd
 
+from lib.data_quality import clean_price_data
 from lib.data_sources import AbstractPriceSource, YFinanceSource
 
 CACHE_DIR = "data"
@@ -94,6 +95,7 @@ def fetch_stock_data(
     source: AbstractPriceSource | None = None,
     mode: DataMode | None = None,
     max_age_days: float | None = None,
+    check_quality: bool = True,
 ) -> pd.DataFrame:
     """指定された銘柄のヒストリカルデータを取得し、Parquet形式でキャッシュ・更新を行う関数。
 
@@ -109,6 +111,10 @@ def fetch_stock_data(
 
     最後に取得元へ問い合わせた時刻は、`<ticker>.meta.json` に記録します（メタ情報のないキャッシュは期限切れ扱い）。
 
+    返す前に、指定された期間のデータを lib.data_quality.clean_price_data で検査し、誤りの行
+    （終値が 0 以下・1日で半値以下か2倍以上になってすぐ戻る行）を取り除きます（#70）。
+    キャッシュには取得元のデータをそのまま保存します（検査の基準を変えたときに取り直さずに済むように）。
+
     Args:
         ticker (str): 取得する銘柄のティッカーシンボル（例: '7203.T', 'AAPL'）。
         start (str, optional): データの取得開始日（'YYYY-MM-DD'）。デフォルトは None（全期間）。
@@ -120,6 +126,7 @@ def fetch_stock_data(
             デフォルトは None（環境変数 TRADING_DATA_MODE、なければ 'auto'）。
         max_age_days (float, optional): auto のときのキャッシュの有効期限（日数）。
             デフォルトは None（環境変数 TRADING_CACHE_MAX_AGE_DAYS、なければ7日）。
+        check_quality (bool, optional): True の場合、データを検査して誤りの行を取り除きます。デフォルトは True。
 
     Returns:
         pd.DataFrame: 指定された期間の株価データを含むデータフレーム。
@@ -191,6 +198,10 @@ def fetch_stock_data(
         df = df.loc[start:]
     elif end:
         df = df.loc[:end]
+
+    # 4. 誤りの行を取り除く（#70）。期間で絞った後に行うので、使わない期間の誤りは警告しない
+    if check_quality:
+        df = clean_price_data(df, ticker)
 
     return df
 

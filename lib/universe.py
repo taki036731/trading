@@ -23,6 +23,10 @@ UNIVERSE_DIR = "universes"
 # - size: 規模区分（TOPIX Core30 / Large70 / Mid400 / Small 1 / Small 2）
 UNIVERSE_COLUMNS = ["ticker", "name", "sector", "size"]
 
+# 銘柄ごとにデータを使い始める日の列（任意。空なら全期間を使う）。#70
+# 上場前のデータが壊れている銘柄（同じコードの別の銘柄のデータが入っているなど）で、上場日などを入れる
+DATA_FROM_COLUMN = "data_from"
+
 # 上場廃止日の列。上場廃止した銘柄を含むユニバースで使う（#13 の第2段階）
 DELISTED_COLUMN = "delisted_on"
 
@@ -73,6 +77,37 @@ def load_universe_file(path: str) -> pd.DataFrame:
     if duplicated:
         raise ValueError(f"エラー: ユニバース {path} の ticker が重複しています。：{duplicated}")
     return universe
+
+
+def data_from_map(universe: pd.DataFrame) -> dict[str, str]:
+    """
+    ユニバースの data_from 列から、銘柄ごとのデータを使い始める日の辞書を作ります。
+
+    lib.multi_backtester.load_universe の data_from 引数に渡します。列がない、または空の銘柄は含みません。
+
+    Args:
+        universe (pd.DataFrame): load_universe_file の戻り値。
+
+    Returns:
+        dict[str, str]: ティッカーをキー、'YYYY-MM-DD' の日付を値とする辞書。
+
+    Raises:
+        ValueError: 日付として読めない値がある場合。
+    """
+    if DATA_FROM_COLUMN not in universe.columns:
+        return {}
+    result: dict[str, str] = {}
+    for ticker, value in zip(universe["ticker"], universe[DATA_FROM_COLUMN].fillna("")):
+        text = str(value).strip()
+        if not text:
+            continue
+        try:
+            result[ticker] = pd.Timestamp(text).strftime("%Y-%m-%d")
+        except ValueError:
+            raise ValueError(
+                f"エラー: ユニバースの {DATA_FROM_COLUMN} が日付ではありません。：{ticker} {text!r}"
+            ) from None
+    return result
 
 
 def has_survivorship_bias(universe: pd.DataFrame) -> bool:
